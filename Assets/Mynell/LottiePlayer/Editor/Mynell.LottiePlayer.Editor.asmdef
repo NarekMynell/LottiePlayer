@@ -1,0 +1,18 @@
+{
+    "name": "Mynell.LottiePlayer.Editor",
+    "rootNamespace": "Mynell.LottiePlayer.Editor",
+    "references": [
+        "Mynell.LottiePlayer"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
