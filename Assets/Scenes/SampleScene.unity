@@ -657,7 +657,7 @@ CanvasRenderer:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1948599538}
-  m_CullTransparentMesh: 1
+  m_CullTransparentMesh: 0
 --- !u!114 &1948599542
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -678,19 +678,21 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  _asset: {fileID: 0}
+  _asset: {fileID: 11400000, guid: bdf56f25585a8471f9c136c6f574537c, type: 2}
   _autoPlay: 1
   _loop: 1
   _speed: 1
   _tessellationQuality: 1
-  _maxVertices: 32768
-  _maxIndices: 65536
-  _maxDrawCommands: 2048
+  _maxVertices: 65536
+  _maxIndices: 196608
+  _maxDrawCommands: 4096
   _maxPolyPoolSize: 32768
   _maxVerticesPerShape: 1024
   _parallelBatchSize: 4
   _preserveAspect: 1
   _verbose: 0
+  _debugForceOpaqueWhiteVertices: 0
+  _debugDrawTestQuad: 0
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

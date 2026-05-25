@@ -17,8 +17,8 @@ namespace Mynell.LottiePlayer
     [CreateAssetMenu(menuName = "Mynell/Lottie Asset", fileName = "NewLottieAsset")]
     public sealed class LottieAsset : ScriptableObject
     {
-        // v3 → v4: LottieLayer gained LayerInd + ParentInd (explicit hierarchy indices).
-        private const int CurrentBlobVersion = 4;
+        // v5 → v6: raw comp-space geometry; runtime RootBridge + hierarchy matrices (no bake-time fold).
+        private const int CurrentBlobVersion = 6;
 
         [Header("Animation Info (read-only)")]
         [SerializeField] private int _blobVersion;

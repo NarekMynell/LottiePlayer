@@ -133,7 +133,9 @@ namespace Mynell.LottiePlayer
             ctx.Report.UnsupportedShapeCount = ctx.UnsupportedShapeCount;
             report = ctx.Report;
 
+#if UNITY_EDITOR
             Debug.Log($"[Mynell.Lottie] Parsed: top={topCount}, precompLayers={precompLayerCount}, precomps={ctx.Precomps.Count}, shapes={ctx.Shapes.Count} (unsup={ctx.UnsupportedShapeCount}, approx={ctx.Report.ApproximatedShapes}), paths={ctx.PathProperties.Count}, props={ctx.Properties.Count}, kfs={ctx.Keyframes.Count}, dropSnap={ctx.Report.DroppedPathSnapshots}, degrAnim={ctx.Report.DegradedAnimatedPaths}. Size={ctx.Header.Width}x{ctx.Header.Height} @ {ctx.Header.FrameRate}fps");
+#endif
             return ctx.ToBlob();
         }
 
@@ -264,7 +266,7 @@ namespace Mynell.LottiePlayer
 
         // -------- Context with growing managed lists, baked to NativeArrays at the end. --------
 
-        private sealed class ParseContext
+        internal sealed class ParseContext
         {
             public LottieHeader Header;
             public List<LottieLayer> Layers = new List<LottieLayer>(8);

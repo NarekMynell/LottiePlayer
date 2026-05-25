@@ -57,24 +57,18 @@ namespace Mynell.LottiePlayer
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static AffineMatrix GetMatrixFromTransform(float2 anchor, float2 pos, float2 scalePerc, float rotDeg)
         {
-            // 1. Normalize Scale from percentage (100% -> 1.0)
             float2 s = scalePerc / 100f;
-
-            // 2. Convert rotation to radians
             float rad = math.radians(rotDeg);
             float sin = math.sin(rad);
             float cos = math.cos(rad);
 
             AffineMatrix m;
-            // Basis vectors (Rotation * Scale)
             m.c0 = new float2(cos * s.x, sin * s.x);
             m.c1 = new float2(-sin * s.y, cos * s.y);
-
-            // 3. Complete the TRS chain: T(pos) · R · S · T(-anchor)
+            // T(pos) · R · S · T(-anchor): anchor mapped through the linear basis columns.
             m.c2 = new float2(
                 pos.x - (m.c0.x * anchor.x + m.c1.x * anchor.y),
                 pos.y - (m.c0.y * anchor.x + m.c1.y * anchor.y));
-
             return m;
         }
 
@@ -163,6 +157,23 @@ namespace Mynell.LottiePlayer
             m.c1 = new float2(0f, -rectDimensions.y * ih);
             m.c2 = new float2(-rectDimensions.x * 0.5f, rectDimensions.y * 0.5f);
             return m;
+        }
+
+        /// <summary>
+        /// Composition → RectTransform root bridge with optional uniform letterboxing.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static AffineMatrix ComputeRootBridge(float2 compSize, float2 rectSize, bool preserveAspect)
+        {
+            float2 safeRect = new float2(math.max(rectSize.x, 1f), math.max(rectSize.y, 1f));
+            if (preserveAspect)
+            {
+                float sx = safeRect.x / math.max(compSize.x, 1e-6f);
+                float sy = safeRect.y / math.max(compSize.y, 1e-6f);
+                float s = math.min(sx, sy);
+                return NormalizationBridge(compSize, compSize * s);
+            }
+            return NormalizationBridge(compSize, safeRect);
         }
 
         /// <summary>

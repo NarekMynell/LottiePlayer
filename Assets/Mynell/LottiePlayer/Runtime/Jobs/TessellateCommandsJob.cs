@@ -111,7 +111,10 @@ namespace Mynell.LottiePlayer
                 localIdx, ref localCount,
                 scratchPrev, scratchNext, scratchAlive);
 
-            // Vertices: transform each polyline point through cmd.World once.
+            if (localCount == 0 && cmd.PolyCount >= 3)
+                EarClipping.FanTriangulate(cmd.PolyOffset, cmd.PolyCount, localIdx, ref localCount);
+
+            // Vertices: transform baked polyline points through cmd.World.
             float2 uv = new float2(0.5f, 0.5f);
             Color32 vertexColor = ResolveVertexColor(cmd.Color);
             for (int v = 0; v < cmd.PolyCount; v++)
@@ -174,8 +177,6 @@ namespace Mynell.LottiePlayer
 
                 if (len2 < 1e-8f)
                 {
-                    // Should be rare — Stage 1's CompactPoly already removed near-coincident
-                    // points. Defensive fallback: zero-area quad at p0.
                     float2 q = cmd.World.Apply(p0);
                     var v = new VertexLayout { Position = new float3(q, 0f), Color = vertexColor, UV = uv };
                     OutVertices[baseV + 0] = v;
@@ -243,10 +244,7 @@ namespace Mynell.LottiePlayer
             byte r = (byte)(packed & 0xFFu);
             byte g = (byte)((packed >> 8) & 0xFFu);
             byte b = (byte)((packed >> 16) & 0xFFu);
-            byte a = (byte)((packed >> 24) & 0xFFu);
-            if (a == 0)
-                a = 255;
-            return new Color32(r, g, b, a);
+            return new Color32(r, g, b, 255);
         }
 
         /// <summary>

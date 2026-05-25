@@ -1,17 +1,18 @@
-// Mynell Lottie Player — Burst-compatible ear-clipping triangulator.
-// O(n^2) — perfectly fine for typical Lottie polygons (< 256 verts post-flatten).
-// Operates on a NativeArray<float2> polygon and writes triangle indices to outIndices.
+// Mynell Lottie Player — Burst-compatible polygon triangulation.
+// Ear-clipping for concave polygons (≤ EarClipMaxVerts), fan fallback otherwise / on failure.
 
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
-using UnityEngine;
 
 namespace Mynell.LottiePlayer
 {
     [BurstCompile]
     public static class EarClipping
     {
+        /// <summary>Above this vertex count, skip O(n²) ear clip and use fan triangulation.</summary>
+        public const int EarClipMaxVerts = 64;
+
         /// <summary>Signed polygon area * 2. Positive = CCW.</summary>
         public static float SignedArea2(NativeArray<float2> poly, int start, int count)
         {
@@ -26,9 +27,8 @@ namespace Mynell.LottiePlayer
         }
 
         /// <summary>
-        /// Triangulate a simple polygon (verts[start..start+count]).
-        /// Appends 3 indices per triangle to <paramref name="outIndices"/> via <paramref name="outCount"/>.
-        /// Indices are absolute (start + local).
+        /// Triangulate a simple polygon. Uses ear clipping for small polys, fan for large ones.
+        /// Falls back to fan when ear clipping yields zero triangles (self-intersecting / degenerate).
         /// </summary>
         public static void Triangulate(
             NativeArray<float2> poly, int start, int count,
@@ -38,6 +38,37 @@ namespace Mynell.LottiePlayer
         {
             if (count < 3) return;
 
+            if (count > EarClipMaxVerts)
+            {
+                FanTriangulate(start, count, outIndices, ref outCount);
+                return;
+            }
+
+            EarClipTriangulate(poly, start, count, outIndices, ref outCount, scratchPrev, scratchNext, scratchAlive);
+
+            if (outCount == 0)
+                FanTriangulate(start, count, outIndices, ref outCount);
+        }
+
+        /// <summary>O(n) fan from vertex 0 — robust fallback for dense / degenerate polys.</summary>
+        public static void FanTriangulate(int start, int count, NativeArray<int> outIndices, ref int outCount)
+        {
+            if (count < 3) return;
+            for (int i = 1; i < count - 1; i++)
+            {
+                if (outCount + 3 > outIndices.Length) return;
+                outIndices[outCount++] = start;
+                outIndices[outCount++] = start + i;
+                outIndices[outCount++] = start + i + 1;
+            }
+        }
+
+        private static void EarClipTriangulate(
+            NativeArray<float2> poly, int start, int count,
+            NativeArray<int> outIndices, ref int outCount,
+            NativeArray<int> scratchPrev, NativeArray<int> scratchNext,
+            NativeArray<byte> scratchAlive)
+        {
             for (int i = 0; i < count; i++)
             {
                 scratchPrev[i] = (i + count - 1) % count;
@@ -46,8 +77,9 @@ namespace Mynell.LottiePlayer
             }
 
             float area2 = SignedArea2(poly, start, count);
-            bool ccw = area2 > 0f;
-            if (!ccw)
+            if (math.abs(area2) < 1e-8f) return;
+
+            if (area2 <= 0f)
             {
                 for (int i = 0; i < count; i++)
                 {
@@ -58,35 +90,45 @@ namespace Mynell.LottiePlayer
 
             int remaining = count;
             int curr = 0;
-            int guard = count * count + 4;
 
-            while (remaining > 3 && guard-- > 0)
+            while (remaining > 2)
             {
-                int prev = scratchPrev[curr];
-                int next = scratchNext[curr];
-
-                if (IsEar(poly, start, prev, curr, next, scratchAlive, scratchNext, count))
+                bool earClipped = false;
+                int probe = curr;
+                for (int pass = 0; pass < remaining; pass++)
                 {
-                    if (outCount + 3 <= outIndices.Length)
+                    if (scratchAlive[probe] == 0)
                     {
-                        outIndices[outCount++] = start + prev;
-                        outIndices[outCount++] = start + curr;
-                        outIndices[outCount++] = start + next;
+                        probe = scratchNext[probe];
+                        continue;
                     }
-                    scratchAlive[curr] = 0;
-                    scratchNext[prev] = next;
-                    scratchPrev[next] = prev;
-                    remaining--;
-                    curr = next;
-                }
-                else
-                {
-                    curr = next;
-                }
-            }
 
-            if (remaining > 3 && guard <= 0)
-                WarnFailsafe();
+                    int prev = scratchPrev[probe];
+                    int next = scratchNext[probe];
+
+                    if (IsEar(poly, start, prev, probe, next, scratchAlive, scratchNext, remaining))
+                    {
+                        if (outCount + 3 <= outIndices.Length)
+                        {
+                            outIndices[outCount++] = start + prev;
+                            outIndices[outCount++] = start + probe;
+                            outIndices[outCount++] = start + next;
+                        }
+                        scratchAlive[probe] = 0;
+                        scratchNext[prev] = next;
+                        scratchPrev[next] = prev;
+                        remaining--;
+                        curr = next;
+                        earClipped = true;
+                        break;
+                    }
+
+                    probe = next;
+                }
+
+                if (!earClipped)
+                    break;
+            }
 
             if (remaining == 3 && outCount + 3 <= outIndices.Length)
             {
@@ -98,17 +140,13 @@ namespace Mynell.LottiePlayer
             }
         }
 
-        [BurstDiscard]
-        private static void WarnFailsafe()
-        {
-            Debug.LogWarning("EarClipping Failsafe Triggered! Triangulation failed for a shape.");
-        }
-
         private static bool IsEar(
             NativeArray<float2> poly, int start,
             int prev, int curr, int next,
-            NativeArray<byte> alive, NativeArray<int> nxt, int total)
+            NativeArray<byte> alive, NativeArray<int> nxt, int remaining)
         {
+            if (alive[prev] == 0 || alive[curr] == 0 || alive[next] == 0) return false;
+
             float2 a = poly[start + prev];
             float2 b = poly[start + curr];
             float2 c = poly[start + next];
@@ -117,8 +155,8 @@ namespace Mynell.LottiePlayer
             if (cross <= 0f) return false;
 
             int v = nxt[next];
-            int guard = total + 4;
-            while (v != prev && guard-- > 0)
+            int walked = 0;
+            while (v != prev && walked < remaining)
             {
                 if (alive[v] != 0)
                 {
@@ -126,6 +164,7 @@ namespace Mynell.LottiePlayer
                     if (PointInTriangle(p, a, b, c)) return false;
                 }
                 v = nxt[v];
+                walked++;
             }
             return true;
         }

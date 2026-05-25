@@ -2,7 +2,10 @@
     "name": "Mynell.LottiePlayer.Editor",
     "rootNamespace": "Mynell.LottiePlayer.Editor",
     "references": [
-        "Mynell.LottiePlayer"
+        "Mynell.LottiePlayer",
+        "Unity.Collections",
+        "Unity.Jobs",
+        "Unity.Mathematics"
     ],
     "includePlatforms": [
         "Editor"

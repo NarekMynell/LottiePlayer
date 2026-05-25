@@ -37,9 +37,9 @@ namespace Mynell.LottiePlayer.Components
     public sealed class MynellLottieUGUI : MaskableGraphic
     {
         // Production floors — match project reference (1000×1000 UI, dense illustration).
-        private const int kProdMaxDrawCommands = 1024;
-        private const int kProdMaxVertices = 16384;
-        private const int kProdMaxIndices = 49152;
+        private const int kProdMaxDrawCommands = 4096;
+        private const int kProdMaxVertices = 65536;
+        private const int kProdMaxIndices = 196608;
         private const int kProdMaxPolyPoolSize = 32768;
         private const int kProdMaxVerticesPerShape = 1024;
         private const int kProdParallelBatchSize = 4;
@@ -105,6 +105,7 @@ namespace Mynell.LottiePlayer.Components
         // Sticky overflow indicator — gates the warning so it fires at most once per
         // (asset, capacity) pair instead of every frame.
         private bool _overflowWarned;
+        private bool _emptyPipelineWarned;
 
         // Persistent mesh — created once in OnEnable, destroyed in OnDisable. MarkDynamic()
         // signals to Unity that we'll be rewriting it every frame; on most platforms this
@@ -123,6 +124,12 @@ namespace Mynell.LottiePlayer.Components
         private int _lastVertCount;
         private int _lastIndexCount;
         private int _lastCommandCount;
+        private float _lastRenderedFrame = float.NaN;
+        private float _lastLayoutWidth = float.NaN;
+        private float _lastLayoutHeight = float.NaN;
+
+        // Reused every rebuild — avoids per-frame VertexHelper allocations.
+        private static readonly VertexHelper s_VertexHelper = new VertexHelper();
 
         public LottieAsset Asset
         {
@@ -132,7 +139,8 @@ namespace Mynell.LottiePlayer.Components
                 if (_asset == value) return;
                 ReleaseBlob();
                 _asset = value;
-                _overflowWarned = false; // re-arm the once-per-asset capacity warning.
+                _overflowWarned = false;
+                _emptyPipelineWarned = false; // re-arm the once-per-asset capacity warning.
                 if (isActiveAndEnabled) EnsureBlob();
                 SetVerticesDirty();
             }
@@ -141,6 +149,26 @@ namespace Mynell.LottiePlayer.Components
         public bool IsPlaying => _playing;
         public float CurrentFrame => _currentFrame;
         public float DurationSeconds => _asset != null ? _asset.DurationSeconds : 0f;
+
+        /// <summary>Editor/diagnostic: run pipeline immediately and refresh canvas.</summary>
+        public void ForceRebuildNow()
+        {
+            EnsureDefaultMaterial();
+            EnsureBuffers();
+            EnsureBlob();
+            _lastRenderedFrame = float.NaN;
+            if (!_blobReady || _asset == null)
+            {
+                Debug.LogWarning("[Mynell.Lottie] ForceRebuildNow: no valid blob.", this);
+                return;
+            }
+            RunPipeline();
+            Debug.Log(
+                $"[Mynell.Lottie] ForceRebuildNow frame={_currentFrame:0.00} cmds={_lastCommandCount} " +
+                $"verts={_lastVertCount} idx={_lastIndexCount}", this);
+            SetVerticesDirty();
+            Canvas.ForceUpdateCanvases();
+        }
 
 #if UNITY_EDITOR
         /// <summary>
@@ -165,6 +193,7 @@ namespace Mynell.LottiePlayer.Components
             _preserveAspect = true;
             _verbose = false;
             _overflowWarned = false;
+            _emptyPipelineWarned = false;
         }
 #endif
 
@@ -188,6 +217,47 @@ namespace Mynell.LottiePlayer.Components
             EnsureBlob();
             if (_asset != null) _currentFrame = _asset.InFrame;
             _playing = _autoPlay && Application.isPlaying;
+            _lastRenderedFrame = float.NaN;
+            if (canvasRenderer != null)
+                canvasRenderer.cullTransparentMesh = false;
+            if (_asset != null)
+                SetVerticesDirty();
+        }
+
+        protected override void OnRectTransformDimensionsChange()
+        {
+            base.OnRectTransformDimensionsChange();
+            _lastRenderedFrame = float.NaN;
+            if (Application.isPlaying && _blobReady)
+                SetVerticesDirty();
+        }
+
+        /// <summary>RectTransform size used for RootBridge — falls back to sizeDelta when layout rect is zero.</summary>
+        private float2 GetLayoutSize()
+        {
+            Rect r = rectTransform.rect;
+            float w = r.width;
+            float h = r.height;
+            if (w < 1f || h < 1f)
+            {
+                Vector2 sd = rectTransform.sizeDelta;
+                if (w < 1f) w = math.abs(sd.x);
+                if (h < 1f) h = math.abs(sd.y);
+            }
+            return new float2(math.max(1f, w), math.max(1f, h));
+        }
+
+        private bool NeedsGeometryRebuild()
+        {
+            float2 layout = GetLayoutSize();
+            if (float.IsNaN(_lastRenderedFrame)) return true;
+            // Stop hammering the pipeline when Stage 1 persistently emits nothing.
+            if (_lastVertCount <= 0 && !_emptyPipelineWarned) return true;
+            if (_playing && _lastVertCount > 0 && math.abs(_currentFrame - _lastRenderedFrame) > 0.001f)
+                return true;
+            if (math.abs(layout.x - _lastLayoutWidth) > 0.5f || math.abs(layout.y - _lastLayoutHeight) > 0.5f)
+                return true;
+            return false;
         }
 
         /// <summary>UGUI requires a valid material on the Graphic for CanvasRenderer to draw.</summary>
@@ -260,6 +330,7 @@ namespace Mynell.LottiePlayer.Components
                     EnsureBlob();
                     if (_asset != null)
                         _currentFrame = Mathf.Clamp(_currentFrame, _asset.InFrame, _asset.OutFrame);
+                    _lastRenderedFrame = float.NaN;
                     SetVerticesDirty();
                 };
             }
@@ -480,7 +551,8 @@ namespace Mynell.LottiePlayer.Components
             // Skip the rebuild registry round-trip when fully culled by a RectMask2D;
             // OnCullingChanged will re-dirty us when we become visible again.
             if (canvasRenderer == null || canvasRenderer.cull) return;
-            SetVerticesDirty();
+            if (NeedsGeometryRebuild())
+                SetVerticesDirty();
         }
 
         /// <summary>
@@ -512,32 +584,17 @@ namespace Mynell.LottiePlayer.Components
             ApplyProductionBudgetFloors();
 
             Rect rect = rectTransform.rect;
-            float compW = _asset.Width > 0 ? _asset.Width : 1f;
-            float compH = _asset.Height > 0 ? _asset.Height : 1f;
-            float scaleX = math.max(1e-6f, rect.width / compW);
-            float scaleY = math.max(1e-6f, rect.height / compH);
-            float2 outScale;
-            float2 outOffset;
-            if (_preserveAspect)
-            {
-                float s = math.min(scaleX, scaleY);
-                outScale = new float2(s, s);
-                float usedW = compW * s;
-                float usedH = compH * s;
-                // Pivot-centered local space: composition center lands at RectTransform origin (0,0).
-                outOffset = new float2(-usedW * 0.5f, usedH * 0.5f);
-            }
-            else
-            {
-                outScale = new float2(scaleX, scaleY);
-                outOffset = new float2(-rect.width * 0.5f, rect.height * 0.5f);
-            }
+            float2 layout = GetLayoutSize();
+            float compW = math.max(1f, _asset.Width);
+            float compH = math.max(1f, _asset.Height);
+            AffineMatrix rootBridge = AffineMatrix.ComputeRootBridge(
+                new float2(compW, compH),
+                layout,
+                _preserveAspect);
 
-            // Reset per-frame state. Length=0 keeps the underlying capacity allocation.
             _commands.Clear();
             _counts[0] = 0; _counts[1] = 0; _counts[2] = 0; _counts[3] = 0; _counts[4] = 0;
 
-            // ---------- Stage 1: BuildDrawCommandsJob (sequential) ----------
             var stage1 = new BuildDrawCommandsJob
             {
                 Header = _blob.Header,
@@ -554,9 +611,7 @@ namespace Mynell.LottiePlayer.Components
                 Vec4Pool = _blob.Vec4Pool,
                 CurrentFrame = _currentFrame,
                 Tolerance = math.max(0.05f, _tessellationQuality),
-                OutputScale = outScale,
-                OutputOffset = outOffset,
-                YFlip = -1f, // Lottie y-down → UGUI y-up.
+                RootBridge = rootBridge,
                 MaxVertices = _maxVertices,
                 MaxIndices = _maxIndices,
                 MaxVerticesPerShape = _maxVerticesPerShape,
@@ -579,11 +634,19 @@ namespace Mynell.LottiePlayer.Components
             _lastCommandCount = cmdCount;
             int overflow = _counts[2];
 
-            if (cmdCount == 0)
+            if (cmdCount == 0 && !_emptyPipelineWarned)
             {
+                _emptyPipelineWarned = true;
                 Debug.LogWarning(
                     $"[Mynell.Lottie] Stage 1 emitted 0 draw commands at frame {_currentFrame:0.00}. " +
-                    $"Check asset bake, layer visibility (ip/op), track mattes, or zero RectTransform size (rect={rect}).",
+                    "Check asset assignment, blob version (re-bake v6), and layer visibility range.",
+                    this);
+            }
+
+            if (cmdCount == 0 && _verbose)
+            {
+                Debug.LogWarning(
+                    $"[Mynell.Lottie] Stage 1 emitted 0 draw commands at frame {_currentFrame:0.00}.",
                     this);
             }
 
@@ -594,7 +657,7 @@ namespace Mynell.LottiePlayer.Components
                     $"[Mynell.Lottie] '{(_asset != null ? _asset.name : "<null>")}': geometry budget exceeded — " +
                     $"verts {_lastVertCount}/{_maxVertices}, indices {_lastIndexCount}/{_maxIndices}, " +
                     $"commands {cmdCount}/{_maxDrawCommands}, polyPool {_counts[4]}/{_maxPolyPoolSize}. " +
-                    $"Remaining shapes were clamped this frame; raise the limits in the Inspector if visuals are clipped.",
+                    "Raise Max Vertices / Max Draw Commands on the component.",
                     this);
             }
 
@@ -620,50 +683,21 @@ namespace Mynell.LottiePlayer.Components
                 _stage2Handle = stage2.Schedule(cmdCount, math.max(1, _parallelBatchSize));
                 _stage2Handle.Complete();
 #endif
-                CenterGeneratedVertices(_lastVertCount);
             }
 
             _hasScheduledJob = false;
+            if (_lastVertCount > 0 && _lastIndexCount > 0)
+            {
+                _lastRenderedFrame = _currentFrame;
+                _lastLayoutWidth = layout.x;
+                _lastLayoutHeight = layout.y;
+            }
 
             if (_verbose)
             {
                 Debug.Log(
-                    $"[Mynell.Lottie] frame={_currentFrame:0.00} layers={_blob.Layers.Length} " +
-                    $"cmds={cmdCount} verts={_lastVertCount} idx={_lastIndexCount} " +
-                    $"poly={_counts[4]}/{_maxPolyPoolSize} overflow={overflow} " +
-                    $"rect={rect} scale={outScale} offset={outOffset}", this);
-            }
-        }
-
-        /// <summary>
-        /// Shift generated vertices so the mesh AABB center aligns with the RectTransform
-        /// pivot (local origin). Corrects any residual projection drift from the job bridge.
-        /// </summary>
-        private void CenterGeneratedVertices(int vertexCount)
-        {
-            if (vertexCount <= 0 || !_vertices.IsCreated) return;
-
-            float2 min = new float2(float.MaxValue, float.MaxValue);
-            float2 max = new float2(float.MinValue, float.MinValue);
-            for (int i = 0; i < vertexCount; i++)
-            {
-                float2 p = _vertices[i].Position.xy;
-                min = math.min(min, p);
-                max = math.max(max, p);
-            }
-            if (!math.all(math.isfinite(min)) || !math.all(math.isfinite(max))) return;
-
-            float2 center = (min + max) * 0.5f;
-            if (math.lengthsq(center) < 1e-8f) return;
-
-            for (int i = 0; i < vertexCount; i++)
-            {
-                var v = _vertices[i];
-                float3 pos = v.Position;
-                pos.x -= center.x;
-                pos.y -= center.y;
-                v.Position = pos;
-                _vertices[i] = v;
+                    $"[Mynell.Lottie] frame={_currentFrame:0.00} cmds={cmdCount} verts={_lastVertCount} idx={_lastIndexCount} " +
+                    $"poly={_counts[4]}/{_maxPolyPoolSize} overflow={overflow}", this);
             }
         }
 
@@ -707,60 +741,61 @@ namespace Mynell.LottiePlayer.Components
         /// </summary>
         protected override void UpdateGeometry()
         {
-            if (!_blobReady || _asset == null || _mesh == null)
+            if (!_blobReady || _asset == null)
             {
-                if (canvasRenderer != null) canvasRenderer.SetMesh(null);
+                if (canvasRenderer != null) canvasRenderer.Clear();
                 return;
             }
 
             EnsureDefaultMaterial();
             UpdateMaterial();
 
-            EnsureMeshLayout();
-
             if (_debugDrawTestQuad)
-            {
                 UploadDebugTestQuad(rectTransform.rect);
-            }
             else
-            {
                 RunPipeline();
-            }
 
             int vc = _lastVertCount;
-            int actualIndexCountThisFrame = _lastIndexCount;
+            int ic = _lastIndexCount;
 
-            if (vc > 0 && actualIndexCountThisFrame > 0)
+            if (vc <= 0 || ic <= 0)
             {
-                _mesh.SetVertexBufferData(_vertices, 0, 0, vc, 0, kBufferFlags);
-                _mesh.SetIndexBufferData(_indices, 0, 0, actualIndexCountThisFrame, kBufferFlags);
+                if (canvasRenderer != null) canvasRenderer.Clear();
+                return;
             }
 
-            if (_verbose)
+            // Standard UGUI path: VertexHelper → Graphic.workerMesh → CanvasRenderer.
+            // Advanced SetVertexBufferData meshes are not reliably picked up by CanvasRenderer in Unity 6.
+            s_VertexHelper.Clear();
+            for (int i = 0; i < vc; i++)
             {
-                Debug.Log(
-                    $"[Lottie Render] Vertices: {vc} | Indices: {actualIndexCountThisFrame} | " +
-                    $"Commands: {_lastCommandCount} | Bounds: {_mesh.bounds}", this);
+                var vl = _vertices[i];
+                s_VertexHelper.AddVert(
+                    new Vector3(vl.Position.x, vl.Position.y, vl.Position.z),
+                    vl.Color,
+                    new Vector4(vl.UV.x, vl.UV.y, 0f, 0f));
             }
+            for (int i = 0; i < ic; i += 3)
+                s_VertexHelper.AddTriangle(_indices[i], _indices[i + 1], _indices[i + 2]);
 
-            _mesh.subMeshCount = 1;
-            _mesh.SetSubMesh(0, new SubMeshDescriptor(0, actualIndexCountThisFrame, MeshTopology.Triangles), kSubMeshFlags);
-            _mesh.bounds = new Bounds(Vector3.zero, new Vector3(1000000f, 1000000f, 1000000f));
+            s_VertexHelper.FillMesh(workerMesh);
+
+            if (canvasRenderer.materialCount != 1)
+                canvasRenderer.materialCount = 1;
 
             Material renderMat = materialForRendering != null
                 ? materialForRendering
                 : (material != null ? material : Canvas.GetDefaultCanvasMaterial());
-            canvasRenderer.materialCount = 1;
             canvasRenderer.SetMaterial(renderMat, 0);
-            canvasRenderer.SetTexture(mainTexture);
+            canvasRenderer.SetTexture(Texture2D.whiteTexture);
             canvasRenderer.SetColor(color);
-            canvasRenderer.SetMesh(_mesh);
+            canvasRenderer.SetMesh(workerMesh);
 
-            var assignedMat = canvasRenderer.GetMaterial();
-            Debug.Log(
-                $"Graphic active: {isActiveAndEnabled}, Material: {(assignedMat != null ? assignedMat.name : "<null>")}, " +
-                $"Verts: {vc}, Indices: {actualIndexCountThisFrame}, Cull: {canvasRenderer.cull}",
-                this);
+            if (_verbose)
+            {
+                Debug.Log(
+                    $"[Lottie Render] Vertices: {vc} | Indices: {ic} | Commands: {_lastCommandCount}", this);
+            }
         }
 
         /// <summary>

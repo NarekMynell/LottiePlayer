@@ -1,13 +1,5 @@
-// Mynell Lottie Player — Phase D Stage 1 (sequential): walk the Lottie hierarchy,
-// fold parent matrices, evaluate animated properties at the current frame, flatten
-// bezier paths into a shared polyline pool and emit prefix-summed DrawCommands for
-// the parallel tessellator (TessellateCommandsJob, Stage 2).
-//
-// Why IJob (not IJobParallelFor): the layer/shape traversal is inherently sequential
-// because every child's world matrix depends on its parent's composed matrix. Burst
-// still gives us full vectorised codegen for the per-shape work; the single-thread
-// scan typically takes 100-400 µs even for dense animations. The HEAVY work
-// (ear-clipping triangulation + per-vertex transform) happens in Stage 2 on N cores.
+// Mynell Lottie Player — Phase D Stage 1: hierarchy walk, matrix fold, flatten paths,
+// emit prefix-summed DrawCommands. GlobalMatrix = ParentGlobal * ChildLocal.
 
 using System.Runtime.CompilerServices;
 using Unity.Burst;
@@ -35,10 +27,9 @@ namespace Mynell.LottiePlayer
         [ReadOnly] public NativeArray<float4> Vec4Pool;
 
         public float CurrentFrame;
-        public float Tolerance;       // bezier flattening tolerance (composition px)
-        public float2 OutputScale;    // composition pixel → UI unit
-        public float2 OutputOffset;   // where composition origin maps in UI units
-        public float YFlip;           // -1 to flip y (Lottie is y-down)
+        public float Tolerance;
+        /// <summary>Composition pixels → RectTransform local bridge (Y-flip + center). Applied once at root.</summary>
+        public AffineMatrix RootBridge;
 
         // Capacity gates for the prefix-sum allocator. Once any of these would be exceeded,
         // we flip the overflow flag and stop emitting further commands.
@@ -72,22 +63,14 @@ namespace Mynell.LottiePlayer
         // -----------------------------------------------------------------------------------
         public void Execute()
         {
-            // Composition → output bridge: scale + offset + Y-flip folded into one matrix
-            // applied as the OUTERMOST transform. Same trick as Phase A — the per-vertex
-            // (q.y *= YFlip; q = q * OutputScale + OutputOffset) post-pass is subsumed by
-            // multiplying every layer's local matrix into this one.
-            AffineMatrix outputBridge;
-            outputBridge.c0 = new float2(OutputScale.x, 0f);
-            outputBridge.c1 = new float2(0f, OutputScale.y * YFlip);
-            outputBridge.c2 = OutputOffset;
-
             int nextVert = 0;
             int nextIdx = 0;
             int polyUsed = 0;
             byte overflow = 0;
 
+            AffineMatrix rootParent = RootBridge;
             ProcessLayerRange(Header.LayerOffset, Header.LayerCount,
-                in outputBridge, PaintState.Default, CurrentFrame, depth: 0,
+                in rootParent, PaintState.Default, CurrentFrame, depth: 0,
                 ref nextVert, ref nextIdx, ref polyUsed, ref overflow);
 
             Counts[0] = nextVert;
@@ -99,11 +82,6 @@ namespace Mynell.LottiePlayer
 
         // ============================== Hierarchy walk ==============================
 
-        /// <summary>
-        /// Reverse-z-order layer traversal (first JSON layer = top = drawn LAST). Recurses
-        /// into precomp layers. World matrices are built in topological order (parents before
-        /// children) before the draw pass. Prefix-sum slots are allocated in draw order only.
-        /// </summary>
         private unsafe void ProcessLayerRange(int offset, int count, in AffineMatrix parent, PaintState parentPaint,
             float parentTime, int depth,
             ref int nextVert, ref int nextIdx, ref int polyUsed, ref byte overflow)
@@ -113,12 +91,13 @@ namespace Mynell.LottiePlayer
             int safeCount = math.min(count, Layers.Length - offset);
             if (safeCount <= 0) return;
 
-            const int MaxCompLayers = 128;
+            const int MaxCompLayers = 256;
+            int cacheCount = math.min(safeCount, MaxCompLayers);
             AffineMatrix* worldCache = stackalloc AffineMatrix[MaxCompLayers];
             byte* worldReady = stackalloc byte[MaxCompLayers];
-            BuildCompositionWorldMatrices(offset, safeCount, parentTime, in parent,
-                worldCache, worldReady, MaxCompLayers);
+            BuildCompositionWorldMatrices(offset, cacheCount, parentTime, in parent, worldCache, worldReady);
 
+            // Reverse z-order: layer[0] = top-most, drawn last (background emitted first).
             for (int li = safeCount - 1; li >= 0; li--)
             {
                 if (overflow != 0) return;
@@ -130,9 +109,9 @@ namespace Mynell.LottiePlayer
 
                 float localTime = (parentTime - layer.StartFrame) * layer.StretchTimeMul;
 
-                AffineMatrix world = li < MaxCompLayers && worldReady[li] != 0
+                AffineMatrix world = li < cacheCount && worldReady[li] != 0
                     ? worldCache[li]
-                    : EvalLayerWorldFallback(offset, safeCount, li, parentTime, in parent);
+                    : BuildLayerWorldMatrix(offset, safeCount, li, parentTime, in parent);
                 if (world.IsDegenerate(1e-8f)) continue;
 
                 float layerOpacity = EvalScalar(layer.OpacityProp, parentTime, 100f) * 0.01f;
@@ -142,7 +121,7 @@ namespace Mynell.LottiePlayer
                 switch (layer.Kind)
                 {
                     case LottieLayerKind.Shape:
-                        ProcessShapeRange(layer.ShapeOffset, layer.ShapeCount, in world, paint, parentTime,
+                        ProcessShapeRange(layer.ShapeOffset, layer.ShapeCount, in world, paint, localTime,
                             inheritTrim: 0, inheritTrimStart: 0f, inheritTrimEnd: 1f,
                             ref nextVert, ref nextIdx, ref polyUsed, ref overflow);
                         break;
@@ -160,49 +139,49 @@ namespace Mynell.LottiePlayer
         }
 
         /// <summary>
-        /// Topological pass: FinalGlobal[child] = FinalGlobal[parent] · Local[child].
-        /// Parents are resolved before children via multi-pass relaxation.
+        /// Topological pass: ChildGlobal = ParentGlobal * ChildLocal. Parents resolve before children.
         /// Includes null layers so their transforms participate in the hierarchy.
         /// </summary>
         private unsafe void BuildCompositionWorldMatrices(
             int layerOffset, int layerCount, float compTime, in AffineMatrix outerParent,
-            AffineMatrix* worldCache, byte* worldReady, int cacheCapacity)
+            AffineMatrix* worldCache, byte* worldReady)
         {
-            int safeCount = math.min(layerCount, cacheCapacity);
-            for (int li = 0; li < safeCount; li++) worldReady[li] = 0;
+            for (int li = 0; li < layerCount; li++) worldReady[li] = 0;
 
-            for (int pass = 0; pass < safeCount; pass++)
+            for (int pass = 0; pass < layerCount; pass++)
             {
-                bool anyProgress = false;
-                for (int li = 0; li < safeCount; li++)
+                bool progress = false;
+                for (int li = 0; li < layerCount; li++)
                 {
                     if (worldReady[li] != 0) continue;
 
                     var layer = Layers[layerOffset + li];
-                    AffineMatrix local = EvalLayerTransform(layer, compTime);
+                    float layerLocalTime = (compTime - layer.StartFrame) * layer.StretchTimeMul;
+                    AffineMatrix local = EvalLayerTransform(layer, layerLocalTime);
                     int parentLocal = ResolveParentLocalIndex(layerOffset, layerCount, li);
 
-                    if (parentLocal < 0 || parentLocal >= safeCount)
+                    if (parentLocal < 0 || parentLocal >= layerCount)
                     {
                         worldCache[li] = AffineMatrix.Multiply(in outerParent, in local);
                         worldReady[li] = 1;
-                        anyProgress = true;
+                        progress = true;
                     }
                     else if (worldReady[parentLocal] != 0)
                     {
                         worldCache[li] = AffineMatrix.Multiply(in worldCache[parentLocal], in local);
                         worldReady[li] = 1;
-                        anyProgress = true;
+                        progress = true;
                     }
                 }
-                if (!anyProgress) break;
+                if (!progress) break;
             }
         }
 
         /// <summary>
-        /// Fallback when cache is full or hierarchy has a cycle: walk parent chain upward.
+        /// Fallback: GlobalMatrix(child) = ParentGlobalMatrix(parent) * ChildLocalMatrix(child).
+        /// Walks parent chain root → child.
         /// </summary>
-        private unsafe AffineMatrix EvalLayerWorldFallback(
+        private unsafe AffineMatrix BuildLayerWorldMatrix(
             int layerOffset, int layerCount, int localIdx, float compTime, in AffineMatrix outerParent)
         {
             const int MaxChain = 16;
@@ -224,7 +203,9 @@ namespace Mynell.LottiePlayer
             AffineMatrix world = outerParent;
             for (int i = depth - 1; i >= 0; i--)
             {
-                AffineMatrix local = EvalLayerTransform(Layers[layerOffset + chain[i]], compTime);
+                var layer = Layers[layerOffset + chain[i]];
+                float layerLocalTime = (compTime - layer.StartFrame) * layer.StretchTimeMul;
+                AffineMatrix local = EvalLayerTransform(layer, layerLocalTime);
                 world = AffineMatrix.Multiply(in world, in local);
             }
             return world;
@@ -258,7 +239,8 @@ namespace Mynell.LottiePlayer
         {
             float2 anchor = EvalVec2(layer.AnchorProp, compTime);
             float2 pos = EvalVec2(layer.PositionProp, compTime);
-            float2 scalePerc = EvalVec2Pct(layer.ScaleProp, compTime);
+            float2 scalePerc = EvalVec2(layer.ScaleProp, compTime);
+            if (scalePerc.x == 0f && scalePerc.y == 0f) scalePerc = new float2(100f, 100f);
             float rot = EvalScalar(layer.RotationProp, compTime, 0f);
             return AffineMatrix.GetMatrixFromTransform(anchor, pos, scalePerc, rot);
         }
@@ -267,7 +249,8 @@ namespace Mynell.LottiePlayer
         {
             float2 anchor = EvalVec2(tr.P0, compTime);
             float2 pos = EvalVec2(tr.P1, compTime);
-            float2 scalePerc = EvalVec2Pct(tr.P2, compTime);
+            float2 scalePerc = EvalVec2(tr.P2, compTime);
+            if (scalePerc.x == 0f && scalePerc.y == 0f) scalePerc = new float2(100f, 100f);
             float rot = EvalScalar(tr.P3, compTime, 0f);
             return AffineMatrix.GetMatrixFromTransform(anchor, pos, scalePerc, rot);
         }
@@ -289,15 +272,16 @@ namespace Mynell.LottiePlayer
         /// <summary>
         /// Two-pass walk of a shape range: pass 1 collects fill / stroke / transform / trim;
         /// pass 2 emits commands for paths, rects, ellipses (recurses into groups).
+        /// <paramref name="layerTime"/> is layer-local (composition time minus st, scaled).
         /// </summary>
         private void ProcessShapeRange(
-            int offset, int count, in AffineMatrix parentWorld, PaintState parentPaint, float compTime,
+            int offset, int count, in AffineMatrix parentWorld, PaintState parentPaint, float layerTime,
             byte inheritTrim, float inheritTrimStart, float inheritTrimEnd,
             ref int nextVert, ref int nextIdx, ref int polyUsed, ref byte overflow)
         {
-            AffineMatrix scopedGroupTr = EvalScopedGroupTransform(offset, count, compTime, out int scopedTrIdx);
+            AffineMatrix scopedGroupTr = EvalScopedGroupTransform(offset, count, layerTime, out int scopedTrIdx);
+            if (scopedGroupTr.IsDegenerate(1e-8f)) return;
             AffineMatrix bakeMatrix = AffineMatrix.Multiply(in parentWorld, in scopedGroupTr);
-            if (bakeMatrix.IsDegenerate(1e-8f)) return;
 
             PaintState paint = parentPaint;
             float4 strokeColor = new float4(0f, 0f, 0f, 0f);
@@ -312,30 +296,30 @@ namespace Mynell.LottiePlayer
                 var s = Shapes[i];
                 if (s.Kind == LottieShapeKind.Fill)
                 {
-                    float4 col = EvalColor(s.P0, compTime);
-                    float op = EvalScalar(s.P1, compTime, 100f) * 0.01f;
+                    float4 col = EvalColor(s.P0, layerTime);
+                    float op = EvalScalar(s.P1, layerTime, 100f) * 0.01f;
                     col.w *= op * paint.Opacity;
                     paint.Color = col;
                     paint.HasFill = 1;
                 }
                 else if (s.Kind == LottieShapeKind.Stroke)
                 {
-                    float4 col = EvalColor(s.P0, compTime);
-                    float op = EvalScalar(s.P1, compTime, 100f) * 0.01f;
+                    float4 col = EvalColor(s.P0, layerTime);
+                    float op = EvalScalar(s.P1, layerTime, 100f) * 0.01f;
                     col.w *= op * paint.Opacity;
                     strokeColor = col;
-                    strokeWidth = EvalScalar(s.P2, compTime, 1f);
+                    strokeWidth = EvalScalar(s.P2, layerTime, 1f);
                     hasStroke = 1;
                 }
                 else if (s.Kind == LottieShapeKind.Transform && i == scopedTrIdx)
                 {
-                    paint.Opacity *= EvalScalar(s.P4, compTime, 100f) * 0.01f;
+                    paint.Opacity *= EvalScalar(s.P4, layerTime, 100f) * 0.01f;
                 }
                 else if (s.Kind == LottieShapeKind.TrimPath)
                 {
-                    float startPct = EvalScalar(s.P0, compTime, 0f);
-                    float endPct = EvalScalar(s.P1, compTime, 100f);
-                    float offsetDeg = EvalScalar(s.P2, compTime, 0f);
+                    float startPct = EvalScalar(s.P0, layerTime, 0f);
+                    float endPct = EvalScalar(s.P1, layerTime, 100f);
+                    float offsetDeg = EvalScalar(s.P2, layerTime, 0f);
                     float phase = offsetDeg / 360f;
                     float ns = startPct * 0.01f + phase;
                     float ne = endPct * 0.01f + phase;
@@ -356,7 +340,7 @@ namespace Mynell.LottiePlayer
                 switch (s.Kind)
                 {
                     case LottieShapeKind.Group:
-                        ProcessShapeRange(s.ChildOffset, s.ChildCount, in bakeMatrix, paint, compTime,
+                        ProcessShapeRange(s.ChildOffset, s.ChildCount, in bakeMatrix, paint, layerTime,
                             hasTrim, trimStart, trimEnd,
                             ref nextVert, ref nextIdx, ref polyUsed, ref overflow);
                         break;
@@ -365,21 +349,21 @@ namespace Mynell.LottiePlayer
                         EmitPathCommands(s.P0, in bakeMatrix,
                             paint.HasFill, fillColorPacked,
                             hasStroke, strokeColorPacked, strokeWidth,
-                            hasTrim, trimStart, trimEnd, compTime,
+                            hasTrim, trimStart, trimEnd, layerTime,
                             ref nextVert, ref nextIdx, ref polyUsed, ref overflow);
                         break;
 
                     case LottieShapeKind.Rect:
                         EmitPrimitiveCommands(kind: 0, s, in bakeMatrix,
                             paint.HasFill, fillColorPacked,
-                            hasStroke, strokeColorPacked, strokeWidth, compTime,
+                            hasStroke, strokeColorPacked, strokeWidth, layerTime,
                             ref nextVert, ref nextIdx, ref polyUsed, ref overflow);
                         break;
 
                     case LottieShapeKind.Ellipse:
                         EmitPrimitiveCommands(kind: 1, s, in bakeMatrix,
                             paint.HasFill, fillColorPacked,
-                            hasStroke, strokeColorPacked, strokeWidth, compTime,
+                            hasStroke, strokeColorPacked, strokeWidth, layerTime,
                             ref nextVert, ref nextIdx, ref polyUsed, ref overflow);
                         break;
                 }
@@ -451,10 +435,6 @@ namespace Mynell.LottiePlayer
             }
         }
 
-        /// <summary>
-        /// Build polyline for a Rect (kind=0) or Ellipse (kind=1), then emit commands.
-        /// Both primitives are always closed.
-        /// </summary>
         private void EmitPrimitiveCommands(byte kind, LottieShape s, in AffineMatrix world,
             byte hasFill, uint fillColorPacked,
             byte hasStroke, uint strokeColorPacked, float strokeWidth, float t,
@@ -489,10 +469,6 @@ namespace Mynell.LottiePlayer
             }
         }
 
-        /// <summary>
-        /// Reserve a fill slot in the prefix-summed buffers. Vertex count = polyCount,
-        /// index count = (polyCount - 2) * 3 (max ear-clip triangles).
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AppendFillCommand(in AffineMatrix world, uint color, int polyOffset, int polyCount,
             ref int nextVert, ref int nextIdx, ref byte overflow)
@@ -524,10 +500,6 @@ namespace Mynell.LottiePlayer
             nextIdx += iCount;
         }
 
-        /// <summary>
-        /// Reserve a stroke slot. Each segment becomes 4 verts + 6 indices (one quad).
-        /// CompactPoly already removed degenerates so segCount is exact.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AppendStrokeCommand(in AffineMatrix world, uint color, float strokeWidth, bool closed,
             int polyOffset, int polyCount,
@@ -591,7 +563,8 @@ namespace Mynell.LottiePlayer
         private static uint PackColor(float4 c)
         {
             uint4 b = (uint4)(math.saturate(c) * 255f + 0.5f);
-            return b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);
+            // Force opaque alpha — prevents invisible geometry from zero-alpha packing bugs.
+            return b.x | (b.y << 8) | (b.z << 16) | (255u << 24);
         }
 
         // -------- Path flatten / trim (carried over from the single-job pipeline) --------
@@ -783,12 +756,6 @@ namespace Mynell.LottiePlayer
             float2 a = Vec2Pool[Keyframes[p.KeyframeOffset + ia].ValueOffset];
             float2 b = Vec2Pool[Keyframes[p.KeyframeOffset + ib].ValueOffset];
             return math.lerp(a, b, blend);
-        }
-
-        private float2 EvalVec2Pct(int propIdx, float t)
-        {
-            if (propIdx < 0 || propIdx >= Properties.Length) return new float2(1f, 1f);
-            return EvalVec2(propIdx, t); // already stored normalized by parser
         }
 
         private float4 EvalColor(int propIdx, float t)

@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 882fb5fb6578c4e5697474e17c113ea3, type: 3}
   m_Name: Interactive volume.lottie
   m_EditorClassIdentifier: Mynell.LottiePlayer::Mynell.LottiePlayer.LottieAsset
-  _blobVersion: 4
+  _blobVersion: 6
   _frameRate: 60
   _inFrame: 0
   _outFrame: 335

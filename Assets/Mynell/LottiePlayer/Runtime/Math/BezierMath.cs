@@ -8,13 +8,11 @@ using Unity.Mathematics;
 namespace Mynell.LottiePlayer
 {
     [BurstCompile]
-    public static class BezierMath
+    public static unsafe class BezierMath
     {
         /// <summary>Cubic-bezier easing (Lottie 'i'/'o' tangents). t in [0,1] → eased.</summary>
         public static float Ease(float t, float x1, float y1, float x2, float y2)
         {
-            // Standard CSS cubic-bezier (P0=0, P1=(x1,y1), P2=(x2,y2), P3=1).
-            // Newton-Raphson on x(t)=u, returns y(u). 4 iters is plenty for animation.
             float u = t;
             for (int i = 0; i < 4; i++)
             {
@@ -42,9 +40,8 @@ namespace Mynell.LottiePlayer
         }
 
         /// <summary>
-        /// Flatten a cubic bezier into a polyline by recursive midpoint subdivision,
-        /// iterative (Burst-safe). Appends to <paramref name="outVerts"/> via <paramref name="outCount"/>.
-        /// Does NOT append the final point p1 (caller appends to avoid duplication on multi-segment paths).
+        /// Flatten a cubic bezier into a polyline by recursive midpoint subdivision.
+        /// Stack-only — zero heap / Temp allocations (safe inside Burst jobs).
         /// </summary>
         public static void FlattenCubic(
             float2 p0, float2 c0, float2 c1, float2 p1,
@@ -53,14 +50,12 @@ namespace Mynell.LottiePlayer
             ref int outCount,
             int maxDepth = 12)
         {
-            // Stack-based subdivision. Each entry: (p0, c0, c1, p1, depth).
-            // Capacity 64 == 12 levels deep on a single branch is plenty.
             const int Cap = 64;
-            var stackP0 = new NativeArray<float2>(Cap, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-            var stackC0 = new NativeArray<float2>(Cap, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-            var stackC1 = new NativeArray<float2>(Cap, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-            var stackP1 = new NativeArray<float2>(Cap, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-            var stackD  = new NativeArray<int>(Cap, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            float2* stackP0 = stackalloc float2[Cap];
+            float2* stackC0 = stackalloc float2[Cap];
+            float2* stackC1 = stackalloc float2[Cap];
+            float2* stackP1 = stackalloc float2[Cap];
+            int* stackD = stackalloc int[Cap];
 
             int sp = 0;
             stackP0[sp] = p0; stackC0[sp] = c0; stackC1[sp] = c1; stackP1[sp] = p1; stackD[sp] = 0; sp++;
@@ -73,7 +68,6 @@ namespace Mynell.LottiePlayer
                 float2 q0 = stackP0[sp], qc0 = stackC0[sp], qc1 = stackC1[sp], q1 = stackP1[sp];
                 int depth = stackD[sp];
 
-                // Flatness: max distance from c0, c1 to chord q0-q1.
                 float2 chord = q1 - q0;
                 float chordLen2 = math.lengthsq(chord);
                 bool flat;
@@ -92,11 +86,10 @@ namespace Mynell.LottiePlayer
 
                 if (flat || depth >= maxDepth)
                 {
-                    if (outCount < outVerts.Length) { outVerts[outCount] = q0; outCount++; }
+                    if (outCount < outVerts.Length) outVerts[outCount++] = q0;
                     continue;
                 }
 
-                // De Casteljau split at t=0.5.
                 float2 m0 = 0.5f * (q0 + qc0);
                 float2 m1 = 0.5f * (qc0 + qc1);
                 float2 m2 = 0.5f * (qc1 + q1);
@@ -106,18 +99,14 @@ namespace Mynell.LottiePlayer
 
                 if (sp + 2 <= Cap)
                 {
-                    // Right half (push first so left is processed first).
                     stackP0[sp] = mid; stackC0[sp] = m12; stackC1[sp] = m2; stackP1[sp] = q1; stackD[sp] = depth + 1; sp++;
-                    // Left half.
-                    stackP0[sp] = q0;  stackC0[sp] = m0;  stackC1[sp] = m01; stackP1[sp] = mid; stackD[sp] = depth + 1; sp++;
+                    stackP0[sp] = q0; stackC0[sp] = m0; stackC1[sp] = m01; stackP1[sp] = mid; stackD[sp] = depth + 1; sp++;
                 }
-                else
+                else if (outCount < outVerts.Length)
                 {
-                    if (outCount < outVerts.Length) { outVerts[outCount] = q0; outCount++; }
+                    outVerts[outCount++] = q0;
                 }
             }
-
-            stackP0.Dispose(); stackC0.Dispose(); stackC1.Dispose(); stackP1.Dispose(); stackD.Dispose();
         }
     }
 }
