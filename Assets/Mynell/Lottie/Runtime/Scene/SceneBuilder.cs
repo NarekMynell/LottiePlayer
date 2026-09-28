@@ -172,6 +172,7 @@ namespace Mynell.Lottie.Scene
 
         static bool InRange(in LayerData l, float compTime) => l.InPoint <= compTime && l.OutPoint > compTime;
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         void RenderComposition(int compIndex, float compTime, in Affine2 compToDevice, float4 clip, int depth, float2 compSize)
         {
             if (depth > MaxDepth || IsEmpty(clip)) return;
@@ -192,6 +193,8 @@ namespace Mynell.Lottie.Scene
         bool IsRenderable(LayerKind k) =>
             k == LayerKind.Shape || k == LayerKind.Precomp || k == LayerKind.Solid || k == LayerKind.Image || k == LayerKind.Text;
 
+        // Not inlined: layers recurse (precomps, mattes, glyph compositions), which would bloat the Burst code.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         void RenderLayer(int li, float compTime, in Affine2 compToDevice, float4 clip, int depth, bool setMatteApplied = false)
         {
             LayerData L = Layers[li];

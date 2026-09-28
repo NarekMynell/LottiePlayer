@@ -13,7 +13,7 @@ namespace Mynell.Lottie.Model
     public static class LottieFormat
     {
         /// <summary>Bump whenever the compiled layout changes (forces re-import).</summary>
-        public const int Version = 5;
+        public const int Version = 6;
         /// <summary>Number of samples lottie-web uses for bezier length tables.</summary>
         public const int CurveSegments = 150;
         /// <summary>lottie-web's ellipse / rounded corner constant.</summary>
@@ -269,6 +269,8 @@ namespace Mynell.Lottie.Model
     {
         public int ContourFirst, ContourCount;   // into GlyphContours
         public float Advance;
+        /// <summary>Animated glyphs ('t': 1): global index of the precomp layer drawing the glyph, -1.</summary>
+        public int Layer;
     }
 
     /// <summary>Glyph contour: Count vertices, 3 points each (v, in, out absolute) in GlyphPoints.</summary>

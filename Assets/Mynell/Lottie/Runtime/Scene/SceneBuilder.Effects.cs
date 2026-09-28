@@ -302,6 +302,7 @@ namespace Mynell.Lottie.Scene
         }
 
         /// <summary>Resolves the layer's pixel effects and styles into <see cref="FrameData.Effects"/> (device units).</summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         void EmitEffects(in LayerData L, float t, in Affine2 world, in Affine2 compToDevice)
         {
             float sx = math.length(new float2(world.a, world.b));

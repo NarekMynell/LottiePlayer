@@ -124,6 +124,7 @@ namespace Mynell.Lottie.Compiler
             for (int i = 0; i < precomps.Count; i++)
                 CompileComposition(i + 1, precomps[i]["layers"], precomps[i]["w"].AsFloat(0), precomps[i]["h"].AsFloat(0),
                     precomps[i]["ddd"].AsInt(0) != 0);
+            CompileGlyphCompositions();
 
             // Markers.
             var markers = new List<LottieMarker>();

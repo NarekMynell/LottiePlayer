@@ -75,9 +75,10 @@ namespace Mynell.Lottie.Compiler
                 string key = CharKey(c["fFamily"].AsString(""), c["style"].AsString(""), c["ch"].AsString(""));
                 if (_charGlyphs.ContainsKey(key)) continue; // lottie-web addChars keeps the first
                 float w = c["w"].AsFloat(0);
-                if (c["t"].AsInt(0) == 1) Unsupported("Animated glyph compositions in text");
                 int g = AddGlyph(w);
-                CompileGlyphShapes(c["data"]["shapes"], g, Affine(1, 0, 0, 1, 0, 0), 0);
+                // 't': 1 -> the glyph is an animated precomposition (compiled once all compositions exist).
+                if (c["t"].AsInt(0) == 1) _glyphComps.Add((g, c["data"]));
+                else CompileGlyphShapes(c["data"]["shapes"], g, Affine(1, 0, 0, 1, 0, 0), 0);
                 FinishGlyph(g);
                 _charGlyphs[key] = g;
             }
@@ -99,8 +100,56 @@ namespace Mynell.Lottie.Compiler
         int AddGlyph(float advance)
         {
             _glyphContourStart = _glyphContours.Count;
-            _glyphs.Add(new GlyphData { ContourFirst = _glyphContours.Count, Advance = advance });
+            _glyphs.Add(new GlyphData { ContourFirst = _glyphContours.Count, Advance = advance, Layer = -1 });
             return _glyphs.Count - 1;
+        }
+
+        readonly List<(int glyph, JsonValue data)> _glyphComps = new List<(int, JsonValue)>();
+
+        /// <summary>
+        /// lottie-web SVGTextLottieElement: glyphs with 't': 1 are precomp layers ('data': refId, ks, ip, op, st, sr) drawn
+        /// in the letter's place at size / 100. They get layers of their own after every composition's layers.
+        /// </summary>
+        void CompileGlyphCompositions()
+        {
+            foreach (var (glyph, data) in _glyphComps)
+            {
+                string refId = data["refId"].AsString("");
+                if (!_compById.TryGetValue(refId, out int comp))
+                {
+                    Warn($"Animated glyph references missing composition '{refId}'.");
+                    continue;
+                }
+                var L = new LayerData
+                {
+                    Kind = LayerKind.Precomp,
+                    Comp = 0,
+                    Parent = -1,
+                    MatteSource = -1,
+                    TimeRemap = -1,
+                    RefComp = comp,
+                    Image = -1,
+                    ShapeProgram = -1,
+                    Text = -1,
+                    CameraZoom = -1,
+                    Ind = int.MinValue,
+                    InPoint = data["ip"].AsFloat(0),
+                    OutPoint = data["op"].AsFloat(float.MaxValue),
+                    StartTime = data["st"].AsFloat(0),
+                    Stretch = data["sr"].AsFloat(1) == 0 ? 1 : data["sr"].AsFloat(1),
+                    Width = data["w"].AsFloat(0),
+                    Height = data["h"].AsFloat(0),
+                };
+                var ks = data["ks"];
+                if (ks.IsObject) L.Flags |= LayerFlags.HasTransform;
+                L.Transform = CompileTransform(ks);
+                var gd = _glyphs[glyph];
+                gd.Layer = _layers.Count;
+                _glyphs[glyph] = gd;
+                _layers.Add(L);
+                _layerNames.Add("");
+                _layerShapeRoots.Add(new int2(-1, 0));
+            }
         }
 
         void FinishGlyph(int g)
