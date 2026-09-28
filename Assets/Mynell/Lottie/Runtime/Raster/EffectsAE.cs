@@ -664,7 +664,7 @@ namespace Mynell.Lottie.Raster
             int n = t.Count;
             bool inner = (op.Flags & 1) != 0, center = (op.Flags & 2) != 0, dilate = (op.Flags & 4) != 0;
             float* a = (float*)tmp;
-            if (dilate) Dilate(t, (op.Z + op.W) * 0.5f, a, (float*)(tmp + n));
+            if (dilate) Dilate(t, (op.Z + op.W) * 0.5f, a, (float*)(tmp + n));   // tmp: 2n + 4 max(w, h) + 4
             else
             {
                 uint* blur = tmp;
@@ -710,36 +710,60 @@ namespace Mynell.Lottie.Raster
 
         /// <summary>
         /// Outside stroke coverage: Euclidean distance to the shape (alpha >= 0.5), converted to an anti-aliased
-        /// ring of <paramref name="radius"/> pixels (Felzenszwalb squared distance transform).
+        /// ring of <paramref name="radius"/> pixels (Felzenszwalb squared distance transform), computed only around
+        /// the opaque part of the surface.
         /// </summary>
         static void Dilate(in Target t, float radius, float* outA, float* scratch)
         {
             int w = t.W, h = t.H, n = w * h;
-            const float Inf = 1e20f;
-            float* dist = outA;
-            for (int i = 0; i < n; i++) dist[i] = (t.Px[i] >> 24) >= 128 ? 0 : Inf;
-            int line = math.max(w, h);
-            float* f = scratch;
-            float* dd = scratch + line;
-            int* v = (int*)(scratch + 2 * line);
-            float* z = scratch + 3 * line;
-            for (int x = 0; x < w; x++)
-            {
-                for (int y = 0; y < h; y++) f[y] = dist[y * w + x];
-                Edt1D(f, h, dd, v, z);
-                for (int y = 0; y < h; y++) dist[y * w + x] = dd[y];
-            }
+            // Bounds of the shape, grown by the stroke.
+            int x0 = w, y0 = h, x1 = -1, y1 = -1;
             for (int y = 0; y < h; y++)
             {
-                float* rowp = dist + y * w;
-                for (int x = 0; x < w; x++) f[x] = rowp[x];
-                Edt1D(f, w, dd, v, z);
-                for (int x = 0; x < w; x++) rowp[x] = dd[x];
+                uint* row = t.Px + y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    if ((row[x] >> 24) < 128) continue;
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    y1 = y;
+                }
             }
-            for (int i = 0; i < n; i++)
+            for (int i = 0; i < n; i++) outA[i] = (t.Px[i] >> 24) * Blend.Inv255;
+            if (x1 < 0) return;
+            int grow = (int)math.ceil(radius) + 2;
+            x0 = math.max(0, x0 - grow); y0 = math.max(0, y0 - grow);
+            x1 = math.min(w - 1, x1 + grow); y1 = math.min(h - 1, y1 + grow);
+            int bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+
+            const float Inf = 1e20f;
+            float* dist = scratch;                 // bw * bh
+            float* f = scratch + bw * bh;
+            int line = math.max(bw, bh);
+            float* dd = f + line;
+            int* v = (int*)(dd + line);
+            float* z = dd + 2 * line;
+            for (int y = 0; y < bh; y++)
+            for (int x = 0; x < bw; x++)
+                dist[y * bw + x] = (t.Px[(y + y0) * w + x + x0] >> 24) >= 128 ? 0 : Inf;
+            for (int x = 0; x < bw; x++)
             {
-                float a = math.saturate(radius + 0.5f - math.sqrt(dist[i]));
-                outA[i] = math.max(a, (t.Px[i] >> 24) * Blend.Inv255);
+                for (int y = 0; y < bh; y++) f[y] = dist[y * bw + x];
+                Edt1D(f, bh, dd, v, z);
+                for (int y = 0; y < bh; y++) dist[y * bw + x] = dd[y];
+            }
+            for (int y = 0; y < bh; y++)
+            {
+                float* rowp = dist + y * bw;
+                for (int x = 0; x < bw; x++) f[x] = rowp[x];
+                Edt1D(f, bw, dd, v, z);
+                float* dst = outA + (y + y0) * w + x0;
+                for (int x = 0; x < bw; x++)
+                {
+                    float a = math.saturate(radius + 0.5f - math.sqrt(dd[x]));
+                    if (a > dst[x]) dst[x] = a;
+                }
             }
         }
 
