@@ -14,7 +14,7 @@ namespace Mynell.Lottie.Editor
     /// Imports Lottie animations: dotLottie archives (.lottie) natively and Bodymovin JSON (.json) as an importer
     /// override (set automatically for newly added Lottie JSON files, or via the importer drop-down).
     /// </summary>
-    [ScriptedImporter(5, new[] { "lottie" }, new[] { "json" })]
+    [ScriptedImporter(6, new[] { "lottie" }, new[] { "json" })]
     [HelpURL("https://airbnb.io/lottie/")]
     public sealed class LottieImporter : ScriptedImporter
     {

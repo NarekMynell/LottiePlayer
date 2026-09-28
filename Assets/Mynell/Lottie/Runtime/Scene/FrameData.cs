@@ -43,6 +43,8 @@ namespace Mynell.Lottie.Scene
         /// <summary>Device-space clip rectangle (xmin, ymin, xmax, ymax).</summary>
         public float4 Clip;
         public int Group;            // render group the item draws into (-1 root)
+        /// <summary>Strokes: portion of each contour's length drawn (start, end fractions); (0, 1) = whole.</summary>
+        public float2 Trim;
         // --- produced by the geometry stage
         public float4 Bounds;        // device bounds of the coverage (after clipping), empty when xmin > xmax
     }
@@ -67,7 +69,11 @@ namespace Mynell.Lottie.Scene
         public float2 ImageSize;
     }
 
-    public enum CmdKind : byte { Draw = 0, BeginGroup = 1, EndGroup = 2, BeginMask = 3, EndMask = 4, BeginMatte = 5, EndMatte = 6 }
+    /// <summary>
+    /// Render commands. A group's matte section renders its track matte (or Set Matte source); its aux section renders
+    /// a layer that one of the group's effects reads (displacement map).
+    /// </summary>
+    public enum CmdKind : byte { Draw = 0, BeginGroup = 1, EndGroup = 2, BeginMask = 3, EndMask = 4, BeginMatte = 5, EndMatte = 6, BeginAux = 7, EndAux = 8 }
 
     public struct RenderCmd
     {
@@ -80,7 +86,7 @@ namespace Mynell.Lottie.Scene
     {
         public float Opacity;
         public byte BlendMode;
-        public byte MatteMode;       // 1 alpha, 2 alpha inverted, 3 luma, 4 luma inverted
+        public byte MatteMode;       // 1 alpha, 2 alpha inverted, 3 luma, 4 luma inverted, 5 / 7 / 9 red / green / blue (+1 inverted)
         public byte HasMask;
         public byte MaskInitOne;     // mask target starts white (first mask subtract / intersect)
         public byte Collapsed;       // no offscreen needed: children draw straight into the parent
@@ -91,6 +97,7 @@ namespace Mynell.Lottie.Scene
         public int EffectFirst;      // range in FrameData.Effects applied to the group's content
         public int EffectCount;
         public float4 Clip;          // device clip for the group
+        public float4 AuxRect;       // device region of the aux surface (empty: the group's own)
         // --- computed after geometry
         public float4 Bounds;        // device-space bounds of the offscreen target (integer aligned)
         public float4 ContentBounds;

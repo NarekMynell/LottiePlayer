@@ -94,10 +94,11 @@ namespace Mynell.Lottie.Raster
         {
             public int Group;
             public byte Collapsed;
-            public byte Section;   // 0 content, 1 mask, 2 matte
+            public byte Section;   // 0 content, 1 mask, 2 matte, 3 aux
             public int Layer;      // surface receiving content
             public int Matte;      // matte surface or -1
             public int Mask;       // mask surface or -1
+            public int Aux;        // aux surface (layer read by an effect) or -1
             public int ArenaMark;
             public int MaskMark;
         }
@@ -222,6 +223,7 @@ namespace Mynell.Lottie.Raster
             ref var tmp = ref *G.StrokeTmp.GetUnsafeList();
             int ptFirst = outPts.Length;
             float* dashes = item.DashCount > 0 ? (float*)F.Dashes.GetUnsafeReadOnlyPtr() + item.DashFirst : null;
+            bool trimmed = (item.Trim.x != 0 || item.Trim.y != 0) && !(item.Trim.x <= 0 && item.Trim.y >= 1);
 
             for (int c = 0; c < item.ContourCount; c++)
             {
@@ -231,6 +233,22 @@ namespace Mynell.Lottie.Raster
                 localPts.Clear();
                 localPolys.Clear();
                 Flattener.Flatten(pts, ct.First, ct.Count, closed, Affine2.Identity, tol, ref localPts, ref localPolys);
+                if (trimmed)
+                {
+                    // Trim each contour to [start, end] of its length (Stroke effect).
+                    dashPts.Clear();
+                    dashPolys.Clear();
+                    for (int p = 0; p < localPolys.Length; p++)
+                    {
+                        Poly poly = localPolys[p];
+                        TrimPolyline(localPts.Ptr + poly.First, poly.Count, closed, item.Trim.x, item.Trim.y, ref dashPts, ref dashPolys);
+                    }
+                    localPts.Clear();
+                    localPolys.Clear();
+                    for (int k = 0; k < dashPts.Length; k++) localPts.Add(dashPts[k]);
+                    for (int k = 0; k < dashPolys.Length; k++) localPolys.Add(dashPolys[k]);
+                }
+                bool polyClosed = closed && !trimmed;
                 for (int p = 0; p < localPolys.Length; p++)
                 {
                     Poly poly = localPolys[p];
@@ -238,7 +256,7 @@ namespace Mynell.Lottie.Raster
                     {
                         dashPts.Clear();
                         dashPolys.Clear();
-                        Dasher.Dash(localPts.Ptr + poly.First, poly.Count, closed, dashes, item.DashCount, item.DashOffset,
+                        Dasher.Dash(localPts.Ptr + poly.First, poly.Count, polyClosed, dashes, item.DashCount, item.DashOffset,
                             ref dashPts, ref dashPolys);
                         for (int d = 0; d < dashPolys.Length; d++)
                         {
@@ -248,12 +266,39 @@ namespace Mynell.Lottie.Raster
                     }
                     else
                     {
-                        Stroker.Stroke(localPts.Ptr + poly.First, poly.Count, closed, style, ref outPts, ref outPolys, ref tmp);
+                        Stroker.Stroke(localPts.Ptr + poly.First, poly.Count, polyClosed, style, ref outPts, ref outPolys, ref tmp);
                     }
                 }
             }
             Affine2 m = item.ToDevice;
             for (int k = ptFirst; k < outPts.Length; k++) outPts.Ptr[k] = m.Apply(outPts.Ptr[k]);
+        }
+
+        /// <summary>Appends the part [s, e] (fractions of the length) of a polyline as an open polyline.</summary>
+        static void TrimPolyline(float2* pts, int count, bool closed, float s, float e, ref UnsafeList<float2> outPts, ref UnsafeList<Poly> outPolys)
+        {
+            if (count < 2 || !(e > s)) return;
+            int segs = closed ? count : count - 1;
+            float total = 0;
+            for (int i = 0; i < segs; i++) total += math.distance(pts[i], pts[(i + 1) % count]);
+            if (!(total > 0)) return;
+            float from = s * total, to = e * total, acc = 0;
+            int first = outPts.Length;
+            for (int i = 0; i < segs; i++)
+            {
+                float2 a = pts[i], b = pts[(i + 1) % count];
+                float len = math.distance(a, b), next = acc + len;
+                if (next >= from && acc <= to && len > 0)
+                {
+                    float t0 = math.saturate((from - acc) / len), t1 = math.saturate((to - acc) / len);
+                    if (outPts.Length == first) outPts.Add(math.lerp(a, b, t0));
+                    outPts.Add(math.lerp(a, b, t1));
+                }
+                acc = next;
+                if (acc > to) break;
+            }
+            if (outPts.Length - first >= 2) outPolys.Add(new Poly { First = first, Count = outPts.Length - first });
+            else outPts.Resize(first);
         }
 
         // ================================================================== bounds
@@ -325,7 +370,7 @@ namespace Mynell.Lottie.Raster
                         // Visible area is limited by an additive mask (starting empty) ...
                         if (gd.HasMask != 0 && gd.MaskInitOne == 0) b = SceneBuilder.Intersect(b, G.GroupMaskBounds[g]);
                         // ... and by a non-inverted track matte.
-                        if (gd.MatteMode == 1 || gd.MatteMode == 3) b = SceneBuilder.Intersect(b, G.GroupMatteBounds[g]);
+                        if (gd.MatteMode != 0 && (gd.MatteMode & 1) == 1) b = SceneBuilder.Intersect(b, G.GroupMatteBounds[g]);
                         if (SceneBuilder.IsEmpty(b)) b = SceneBuilder.EmptyRect;
                         G.GroupRect[g] = RoundOut(b);
                         if (stack.Length > 0 && !SceneBuilder.IsEmpty(b)) AddBounds(stack[stack.Length - 1], b);
@@ -333,12 +378,14 @@ namespace Mynell.Lottie.Raster
                     }
                     case CmdKind.BeginMask:
                     case CmdKind.BeginMatte:
+                    case CmdKind.BeginAux:
                     case CmdKind.EndMask:
                     case CmdKind.EndMatte:
+                    case CmdKind.EndAux:
                         if (stack.Length > 0)
                         {
                             int2 top = stack[stack.Length - 1];
-                            top.y = cmd.Kind == CmdKind.BeginMask ? 1 : cmd.Kind == CmdKind.BeginMatte ? 2 : 0;
+                            top.y = cmd.Kind == CmdKind.BeginMask ? 1 : cmd.Kind == CmdKind.BeginMatte ? 2 : cmd.Kind == CmdKind.BeginAux ? 3 : 0;
                             stack[stack.Length - 1] = top;
                         }
                         break;
@@ -400,6 +447,7 @@ namespace Mynell.Lottie.Raster
         int CurrentTarget()
         {
             var top = R.Stack[R.Stack.Length - 1];
+            if (top.Section == 3) return top.Aux;
             if (top.Section == 2) return top.Matte;
             if (top.Section == 1) return top.Mask;
             return top.Layer;
@@ -412,7 +460,7 @@ namespace Mynell.Lottie.Raster
             R.Surfaces.Clear();
             R.Stack.Clear();
             R.Surfaces.Add(new Surface { Offset = -1, X0 = 0, Y0 = BandY0, W = RootW, H = BandY1 - BandY0 });
-            R.Stack.Add(new StackEntry { Group = -1, Layer = 0, Matte = -1, Mask = -1 });
+            R.Stack.Add(new StackEntry { Group = -1, Layer = 0, Matte = -1, Mask = -1, Aux = -1 });
             _mergeOffset = -1;
 
             int cmdCount = F.Cmds.Length;
@@ -438,7 +486,7 @@ namespace Mynell.Lottie.Raster
                         int parentTarget = CurrentTarget();
                         if (gd.Collapsed != 0)
                         {
-                            R.Stack.Add(new StackEntry { Group = g, Collapsed = 1, Layer = parentTarget, Matte = -1, Mask = -1 });
+                            R.Stack.Add(new StackEntry { Group = g, Collapsed = 1, Layer = parentTarget, Matte = -1, Mask = -1, Aux = -1 });
                             break;
                         }
                         int4 parentRect = parentTarget >= 0 ? R.Surfaces[parentTarget].Rect : new int4();
@@ -461,6 +509,7 @@ namespace Mynell.Lottie.Raster
                             MaskMark = R.MaskArena.Length,
                             Matte = -1,
                             Mask = -1,
+                            Aux = -1,
                         };
                         e.Layer = AddSurface(rect, false, false);
                         R.Stack.Add(e);
@@ -482,6 +531,20 @@ namespace Mynell.Lottie.Raster
                         R.Stack[R.Stack.Length - 1] = e;
                         break;
                     }
+                    case CmdKind.BeginAux:
+                    {
+                        var e = R.Stack[R.Stack.Length - 1];
+                        if (e.Aux < 0)
+                        {
+                            float4 auxRect = F.Groups[e.Group].AuxRect;
+                            int4 rect = SceneBuilder.IsEmpty(auxRect) ? R.Surfaces[e.Layer].Rect : RoundOut(auxRect);
+                            e.Aux = AddSurface(EmptyI(rect) ? R.Surfaces[e.Layer].Rect : rect, false, false);
+                        }
+                        e.Section = 3;
+                        R.Stack[R.Stack.Length - 1] = e;
+                        break;
+                    }
+                    case CmdKind.EndAux:
                     case CmdKind.EndMatte:
                     case CmdKind.EndMask:
                     {
@@ -600,6 +663,7 @@ namespace Mynell.Lottie.Raster
                     case EffectOpKind.Sphere:
                     case EffectOpKind.DirectionalBlur:
                     case EffectOpKind.Sharpen:
+                    case EffectOpKind.DisplacementMap:
                     {
                         // These read the unmodified source anywhere while writing the output.
                         int mark = R.Arena.Length;
@@ -616,6 +680,9 @@ namespace Mynell.Lottie.Raster
                             case EffectOpKind.Bulge: Effects.Bulge(op, dst, src); break;
                             case EffectOpKind.Sphere: Effects.Sphere(op, dst, src, floats + op.Data); break;
                             case EffectOpKind.DirectionalBlur: Effects.DirectionalBlur(op, dst, src); break;
+                            case EffectOpKind.DisplacementMap:
+                                if (e.Aux >= 0) Effects.DisplacementMap(op, dst, src, Target(R.Surfaces[e.Aux]), floats + op.Data);
+                                break;
                             default: Effects.Sharpen(op, dst, src); break;
                         }
                         R.Arena.ResizeUninitialized(mark);
@@ -724,6 +791,12 @@ namespace Mynell.Lottie.Raster
                 case 2: return 255 - (px >> 24);
                 case 3: return Px8.Luma(px);
                 case 4: return 255 - Px8.Luma(px);
+                case 5: return px & 0xFF;
+                case 6: return 255 - (px & 0xFF);
+                case 7: return (px >> 8) & 0xFF;
+                case 8: return 255 - ((px >> 8) & 0xFF);
+                case 9: return (px >> 16) & 0xFF;
+                case 10: return 255 - ((px >> 16) & 0xFF);
                 default: return 255;
             }
         }
@@ -1061,6 +1134,11 @@ namespace Mynell.Lottie.Raster
         int _imgW, _imgH;
         float2 _imgScale, _imgOffset;
         uint _opacity8;
+        // Minified images: two mip levels (base pointers, sizes) and the blend between them.
+        uint* _mip0, _mip1;
+        int2 _mip0Size, _mip1Size;
+        float _mip0Scale, _mip1Scale, _mipBlend;
+        bool _mipmapped;
 
         public bool IsImage => _kind == PaintKind.Image;
 
@@ -1120,6 +1198,19 @@ namespace Mynell.Lottie.Raster
                     s._imgScale = new float2(1f / scale);
                     s._imgOffset = (box - new float2(info.y, info.z) * scale) * 0.5f;
                     s.Transparent = false;
+                    // Level of detail: image texels per device pixel (the paint transform is affine, so it is constant).
+                    float2 dx = s._toPaint.ApplyVector(new float2(1, 0)) * s._imgScale, dy = s._toPaint.ApplyVector(new float2(0, 1)) * s._imgScale;
+                    float lod = math.log2(math.max(math.max(math.length(dx), math.length(dy)), 1e-6f));
+                    if (info.w > 1 && lod > 0)
+                    {
+                        int l0 = math.min((int)lod, info.w - 1), l1 = math.min(l0 + 1, info.w - 1);
+                        s._mipmapped = true;
+                        s._mipBlend = l1 > l0 ? math.saturate(lod - l0) : 0;
+                        MipLevel(imagePixels + info.x, info.y, info.z, l0, out s._mip0, out s._mip0Size);
+                        MipLevel(imagePixels + info.x, info.y, info.z, l1, out s._mip1, out s._mip1Size);
+                        s._mip0Scale = 1f / (1 << l0);
+                        s._mip1Scale = 1f / (1 << l1);
+                    }
                     break;
                 }
                 default:
@@ -1139,22 +1230,52 @@ namespace Mynell.Lottie.Raster
             s.Transparent = a <= 0;
         }
 
-        /// <summary>Bilinear sample (premultiplied, clamp to edge) of the image paint at a device point.</summary>
+        /// <summary>
+        /// Bilinear sample (premultiplied, clamp to edge) of the image paint at a device point; minified images are
+        /// sampled trilinearly from their mip levels.
+        /// </summary>
         public uint SampleImage(float2 device)
         {
-            float2 p = (_toPaint.Apply(device) - _imgOffset) * _imgScale - 0.5f;
+            float2 p = (_toPaint.Apply(device) - _imgOffset) * _imgScale;
+            uint c;
+            if (_mipmapped)
+            {
+                c = Bilinear(_mip0, _mip0Size.x, _mip0Size.y, p * _mip0Scale - 0.5f);
+                if (_mipBlend > 0)
+                {
+                    uint c1 = Bilinear(_mip1, _mip1Size.x, _mip1Size.y, p * _mip1Scale - 0.5f);
+                    c = Lerp256(c, c1, (uint)(_mipBlend * 256f + 0.5f));
+                }
+            }
+            else c = Bilinear(_img, _imgW, _imgH, p - 0.5f);
+            return _opacity8 >= 255 ? c : Px8.Mul(c, _opacity8);
+        }
+
+        static uint Bilinear(uint* img, int w, int h, float2 p)
+        {
             float2 f = math.floor(p);
             int x0 = (int)f.x, y0 = (int)f.y;
             float2 t = p - f;
-            int xa = math.clamp(x0, 0, _imgW - 1), xb = math.clamp(x0 + 1, 0, _imgW - 1);
-            int ya = math.clamp(y0, 0, _imgH - 1), yb = math.clamp(y0 + 1, 0, _imgH - 1);
-            uint* r0 = _img + ya * _imgW;
-            uint* r1 = _img + yb * _imgW;
+            int xa = math.clamp(x0, 0, w - 1), xb = math.clamp(x0 + 1, 0, w - 1);
+            int ya = math.clamp(y0, 0, h - 1), yb = math.clamp(y0 + 1, 0, h - 1);
+            uint* r0 = img + ya * w;
+            uint* r1 = img + yb * w;
             uint wx = (uint)(t.x * 256f + 0.5f), wy = (uint)(t.y * 256f + 0.5f);
             uint top = Lerp256(r0[xa], r0[xb], wx);
             uint bot = Lerp256(r1[xa], r1[xb], wx);
-            uint c = Lerp256(top, bot, wy);
-            return _opacity8 >= 255 ? c : Px8.Mul(c, _opacity8);
+            return Lerp256(top, bot, wy);
+        }
+
+        static void MipLevel(uint* base0, int w, int h, int level, out uint* ptr, out int2 size)
+        {
+            ptr = base0;
+            for (int l = 0; l < level; l++)
+            {
+                ptr += w * h;
+                w = math.max(1, w >> 1);
+                h = math.max(1, h >> 1);
+            }
+            size = new int2(w, h);
         }
 
         static uint Lerp256(uint a, uint b, uint w)

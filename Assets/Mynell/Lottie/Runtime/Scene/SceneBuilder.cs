@@ -154,6 +154,7 @@ namespace Mynell.Lottie.Scene
                 MatteMode = matteMode,
                 Parent = _group,
                 Clip = clip,
+                AuxRect = EmptyRect,
                 Reason = reason,
             });
             Cmd(CmdKind.BeginGroup, g);
@@ -188,10 +189,31 @@ namespace Mynell.Lottie.Scene
         bool IsRenderable(LayerKind k) =>
             k == LayerKind.Shape || k == LayerKind.Precomp || k == LayerKind.Solid || k == LayerKind.Image || k == LayerKind.Text;
 
-        void RenderLayer(int li, float compTime, in Affine2 compToDevice, float4 clip, int depth)
+        void RenderLayer(int li, float compTime, in Affine2 compToDevice, float4 clip, int depth, bool setMatteApplied = false)
         {
             LayerData L = Layers[li];
             if (!IsRenderable(L.Kind)) return;
+            if (!setMatteApplied && FindSetMatte(L, compTime, out int matteLayer, out byte matteMode))
+            {
+                // Set Matte (lottie-web SVGMatte3Effect): the whole layer is masked by another layer of its composition.
+                if (matteMode == 0) return; // matte channel "off"
+                if (matteMode == 255 || depth >= MaxDepth)
+                {
+                    RenderLayer(li, compTime, compToDevice, clip, depth + 1, true);
+                    return;
+                }
+                int wg = BeginGroup(1f, 0, matteMode, clip, 3);
+                Cmd(CmdKind.BeginMatte, wg);
+                int prevSection = _section;
+                _section = 2;
+                if (matteLayer >= 0 && matteLayer != li && InRange(Layers[matteLayer], compTime))
+                    RenderLayer(matteLayer, compTime, compToDevice, clip, depth + 1);
+                _section = prevSection;
+                Cmd(CmdKind.EndMatte, wg);
+                RenderLayer(li, compTime, compToDevice, clip, depth + 1, true);
+                EndGroup(wg);
+                return;
+            }
             float opacity = P.Scalar(L.Transform.Opacity, compTime, 100f) * 0.01f;
             // Transform effects (lottie-web localTransforms): content -> effect matrix -> layer transform.
             bool hasTransformEffect = TransformEffects(L, compTime, false, out Affine2 effectMatrix, out float effectOpacity);
@@ -204,7 +226,10 @@ namespace Mynell.Lottie.Scene
             world = world.Then(compToDevice);
             if (hasTransformEffect) world = effectMatrix.Then(world);
 
-            bool hasMask = HasActiveMasks(L);
+            int strokeEffect = FindStrokeEffect(L);
+            int strokeStyle = strokeEffect >= 0 ? StrokeEffectPaintStyle(Effects[strokeEffect], compTime) : 0;
+            // lottie-web's Stroke effect removes the layer masks when painting on (or instead of) the layer.
+            bool hasMask = HasActiveMasks(L) && strokeStyle != 1 && strokeStyle != 2;
             bool hasMatte = L.MatteMode != 0 && L.MatteSource >= 0;
             bool isPrecomp = L.Kind == LayerKind.Precomp && L.RefComp >= 0;
             bool hasEffects = HasRenderableEffects(L);
@@ -212,7 +237,7 @@ namespace Mynell.Lottie.Scene
             bool rotatedClip = isPrecomp && L.Width > 0 && L.Height > 0 && !world.IsAxisAligned;
 
             bool needsGroup = hasMask || hasMatte || L.BlendMode != 0 || opacity < 1 || hasEffects ||
-                              precompNeedsIsolation || rotatedClip;
+                              precompNeedsIsolation || rotatedClip || strokeStyle != 0;
             bool nonLocal = hasEffects && HasNonLocalEffects(L);
             if (nonLocal)
             {
@@ -235,6 +260,24 @@ namespace Mynell.Lottie.Scene
                     gd.EffectCount = Out.Effects.Length - gd.EffectFirst;
                     gd.NonLocal = (byte)(nonLocal ? 1 : 0);
                     Out.Groups[g] = gd;
+                    int mapLayer = DisplacementSource(L, compTime);
+                    if (mapLayer >= 0)
+                    {
+                        // The displacement map reads another layer of the composition (rendered in its place), anywhere
+                        // in that layer's box.
+                        var gd2 = Out.Groups[g];
+                        float4 mapBox = TransformRectBounds(compToDevice, new float4(0, 0, LayerBoxSize(Layers[mapLayer])));
+                        float2 grow = clip.zw - clip.xy;
+                        gd2.AuxRect = Intersect(mapBox, new float4(clip.xy - grow, clip.zw + grow));
+                        Out.Groups[g] = gd2;
+                        Cmd(CmdKind.BeginAux, g);
+                        int prev = _section;
+                        _section = 3;
+                        if (InRange(Layers[mapLayer], compTime) && depth < MaxDepth)
+                            RenderLayer(mapLayer, compTime, compToDevice, gd2.AuxRect, depth + 1);
+                        _section = prev;
+                        Cmd(CmdKind.EndAux, g);
+                    }
                 }
             }
             else itemOpacity = opacity;
@@ -261,6 +304,31 @@ namespace Mynell.Lottie.Scene
                 Cmd(CmdKind.EndMask, g);
             }
 
+            int revealGroup = -1;
+            if (strokeStyle == 3)
+            {
+                // "Reveal original image": the strokes are an alpha matte of the layer content.
+                revealGroup = BeginGroup(1f, 0, 1, clip, 4);
+                Cmd(CmdKind.BeginMatte, revealGroup);
+                int prev = _section;
+                _section = 2;
+                EmitStrokeEffect(L, Effects[strokeEffect], compTime, world, clip, 1f, true);
+                _section = prev;
+                Cmd(CmdKind.EndMatte, revealGroup);
+            }
+
+            if (strokeStyle != 2)
+                RenderLayerContent(L, compTime, world, clip, itemOpacity, needsGroup, isPrecomp, rotatedClip, depth);
+
+            if (revealGroup >= 0) EndGroup(revealGroup);
+            if (strokeStyle == 1 || strokeStyle == 2) EmitStrokeEffect(L, Effects[strokeEffect], compTime, world, clip, itemOpacity, false);
+
+            if (g >= 0) EndGroup(g);
+        }
+
+        void RenderLayerContent(in LayerData L, float compTime, in Affine2 world, float4 clip, float itemOpacity, bool needsGroup,
+            bool isPrecomp, bool rotatedClip, int depth)
+        {
             switch (L.Kind)
             {
                 case LayerKind.Shape:
@@ -300,8 +368,6 @@ namespace Mynell.Lottie.Scene
                     break;
                 }
             }
-
-            if (g >= 0) EndGroup(g);
         }
 
         bool HasActiveMasks(in LayerData L)
@@ -697,10 +763,12 @@ namespace Mynell.Lottie.Scene
                         break;
                     case CmdKind.BeginMask:
                     case CmdKind.BeginMatte:
+                    case CmdKind.BeginAux:
                         sectionDepth++;
                         break;
                     case CmdKind.EndMask:
                     case CmdKind.EndMatte:
+                    case CmdKind.EndAux:
                         sectionDepth--;
                         break;
                     case CmdKind.Draw:

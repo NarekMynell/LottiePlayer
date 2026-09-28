@@ -101,7 +101,7 @@ namespace Mynell.Lottie
                 if (!tex.LoadImage(bytes, false)) continue;
                 decoded[i] = tex.GetPixels32();
                 sizes[i] = new int2(tex.width, tex.height);
-                total += tex.width * tex.height;
+                total += MipChainSize(tex.width, tex.height, out _);
             }
             if (tex != null) LottieUtil.DestroySafe(tex);
 
@@ -125,8 +125,52 @@ namespace Mynell.Lottie
                         _imagePixels[dst + x] = r | (g << 8) | (b << 16) | (a << 24);
                     }
                 }
-                _imageInfo[i] = new int4(offset, w, h, 0);
-                offset += w * h;
+                int chain = MipChainSize(w, h, out int levels);
+                BuildMips(_imagePixels, offset, w, h, levels);
+                _imageInfo[i] = new int4(offset, w, h, levels);
+                offset += chain;
+            }
+        }
+
+        /// <summary>Pixel count of an image and its mip levels (halved down to 1 × 1).</summary>
+        static int MipChainSize(int w, int h, out int levels)
+        {
+            int total = 0;
+            levels = 0;
+            while (true)
+            {
+                total += w * h;
+                levels++;
+                if (w == 1 && h == 1) break;
+                w = math.max(1, w >> 1);
+                h = math.max(1, h >> 1);
+            }
+            return total;
+        }
+
+        /// <summary>Box-filters each level (premultiplied) from the previous one; images are sampled trilinearly when minified.</summary>
+        static void BuildMips(NativeArray<uint> px, int offset, int w, int h, int levels)
+        {
+            for (int l = 1; l < levels; l++)
+            {
+                int nw = math.max(1, w >> 1), nh = math.max(1, h >> 1);
+                int dst = offset + w * h;
+                for (int y = 0; y < nh; y++)
+                {
+                    int y0 = math.min(2 * y, h - 1), y1 = math.min(2 * y + 1, h - 1);
+                    for (int x = 0; x < nw; x++)
+                    {
+                        int x0 = math.min(2 * x, w - 1), x1 = math.min(2 * x + 1, w - 1);
+                        uint a = px[offset + y0 * w + x0], b = px[offset + y0 * w + x1];
+                        uint c = px[offset + y1 * w + x0], d = px[offset + y1 * w + x1];
+                        uint rb = ((a & 0x00FF00FFu) + (b & 0x00FF00FFu) + (c & 0x00FF00FFu) + (d & 0x00FF00FFu) + 0x00020002u) >> 2;
+                        uint ga = (((a >> 8) & 0x00FF00FFu) + ((b >> 8) & 0x00FF00FFu) + ((c >> 8) & 0x00FF00FFu) + ((d >> 8) & 0x00FF00FFu) + 0x00020002u) >> 2;
+                        px[dst + y * nw + x] = (rb & 0x00FF00FFu) | ((ga & 0x00FF00FFu) << 8);
+                    }
+                }
+                offset = dst;
+                w = nw;
+                h = nh;
             }
         }
 

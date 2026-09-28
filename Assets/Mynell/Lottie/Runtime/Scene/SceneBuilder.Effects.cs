@@ -55,10 +55,151 @@ namespace Mynell.Lottie.Scene
                 case EffectKind.StyleOuterGlow:
                 case EffectKind.StyleInnerGlow:
                 case EffectKind.StyleColorOverlay:
+                case EffectKind.DisplacementMap:
                     return true;
             }
             return false;
         }
+
+        /// <summary>Global index of the layer with 'ind' == <paramref name="ind"/> in composition <paramref name="comp"/>, -1.</summary>
+        int FindLayerByInd(int comp, int ind)
+        {
+            CompData c = Comps[comp];
+            for (int i = 0; i < c.LayerCount; i++)
+                if (Layers[c.FirstLayer + i].Ind == ind) return c.FirstLayer + i;
+            return -1;
+        }
+
+        /// <summary>
+        /// The layer's Set Matte effect: its source layer and matte mode (0 = nothing visible, 255 = no matte). lottie-web
+        /// always uses the source alpha; the channel and invert options follow After Effects.
+        /// </summary>
+        bool FindSetMatte(in LayerData L, float t, out int matteLayer, out byte mode)
+        {
+            matteLayer = -1;
+            mode = 0;
+            for (int i = 0; i < L.EffectCount; i++)
+            {
+                var e = Effects[L.EffectFirst + i];
+                if (e.Enabled == 0 || e.Kind != EffectKind.Matte3) continue;
+                matteLayer = FindLayerByInd(L.Comp, (int)math.round(EffectScalar(e, 0, t, 0)));
+                if (matteLayer < 0) return false; // lottie-web: no source layer -> no matte
+                int channel = (int)math.round(EffectScalar(e, 1, t, 4));
+                bool invert = EffectScalar(e, 2, t, 0) != 0;
+                switch (channel)
+                {
+                    case 1: mode = 5; break;   // red
+                    case 2: mode = 7; break;   // green
+                    case 3: mode = 9; break;   // blue
+                    case 5: mode = 3; break;   // luminance
+                    case 9: mode = (byte)(invert ? 0 : 255); return true;   // full
+                    case 10: mode = (byte)(invert ? 255 : 0); return true;  // off
+                    default: mode = 1; break;  // alpha (hue / lightness / saturation: alpha)
+                }
+                if (invert) mode++;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Index (in <see cref="Effects"/>) of the layer's first enabled Stroke effect, -1.</summary>
+        int FindStrokeEffect(in LayerData L)
+        {
+            for (int i = 0; i < L.EffectCount; i++)
+            {
+                var e = Effects[L.EffectFirst + i];
+                if (e.Enabled != 0 && e.Kind == EffectKind.Stroke && L.MaskCount > 0) return L.EffectFirst + i;
+            }
+            return -1;
+        }
+
+        /// <summary>Stroke effect paint style: 1 on original image, 2 on transparent, 3 reveal original image.</summary>
+        int StrokeEffectPaintStyle(in EffectData e, float t) => math.clamp((int)math.round(EffectScalar(e, 10, t, 1)), 1, 3);
+
+        /// <summary>lottie-web SVGStrokeEffect: strokes the layer's mask paths (round caps, width = 2 × brush size).</summary>
+        void EmitStrokeEffect(in LayerData L, in EffectData e, float t, in Affine2 world, float4 clip, float opacity, bool asMatte)
+        {
+            bool all = EffectScalar(e, 1, t, 0) == 1;
+            int first = all ? 0 : (int)math.round(EffectScalar(e, 0, t, 1)) - 1;
+            int last = all ? L.MaskCount - 1 : first;
+            float start = EffectScalar(e, 7, t, 0), end = EffectScalar(e, 8, t, 100);
+            float s0 = math.min(start, end) * 0.01f, e0 = math.max(start, end) * 0.01f;
+            if (!(e0 > s0)) return;
+            float width = EffectScalar(e, 4, t, 2) * 2;
+            float gap = width * EffectScalar(e, 9, t, 15) * 0.01f;
+            float4 color = asMatte ? new float4(1, 1, 1, 1) : EffectColor(e, 3, t, new float4(1, 1, 1, 1));
+            color.xyz = math.floor(math.saturate(color.xyz) * 255f) / 255f; // lottie-web: rgb(bmFloor(c * 255))
+            int paint = AddSolidPaint(new float4(color.xyz, 1), math.saturate(EffectScalar(e, 6, t, 1)) * opacity, Affine2.Identity);
+            for (int m = math.max(first, 0); m <= last && m < L.MaskCount; m++)
+            {
+                MaskData md = Masks[L.MaskFirst + m];
+                int cFirst = Out.Contours.Length;
+                AppendPathProp(md.Path, t, Affine2.Identity);
+                int cCount = Out.Contours.Length - cFirst;
+                if (cCount == 0) continue;
+                int dashFirst = Out.Dashes.Length, dashCount = 0;
+                if (gap > 0)
+                {
+                    Out.Dashes.Add(1);
+                    Out.Dashes.Add(gap);
+                    dashCount = 2;
+                }
+                AddItem(new DrawItem
+                {
+                    Kind = ItemKind.Stroke,
+                    Cap = 2,
+                    Join = 1,
+                    MiterLimit = 4,
+                    StrokeWidth = width,
+                    ContourFirst = cFirst,
+                    ContourCount = cCount,
+                    ToDevice = world,
+                    DashFirst = dashFirst,
+                    DashCount = dashCount,
+                    DashOffset = dashCount > 0 ? 1 : 0, // lottie-web: stroke-dashoffset 1
+                    Paint = paint,
+                    Clip = clip,
+                    Group = _group,
+                    Trim = s0 > 0 || e0 < 1 ? new float2(s0, e0) : float2.zero,
+                });
+            }
+        }
+
+        /// <summary>The layer read by the layer's Displacement Map effect, -1.</summary>
+        int DisplacementSource(in LayerData L, float t)
+        {
+            for (int i = 0; i < L.EffectCount; i++)
+            {
+                var e = Effects[L.EffectFirst + i];
+                if (e.Enabled == 0 || e.Kind != EffectKind.DisplacementMap) continue;
+                return FindLayerByInd(L.Comp, (int)math.round(EffectScalar(e, 0, t, -1)));
+            }
+            return -1;
+        }
+
+        /// <summary>Skottie DisplacementNode selector coefficients: (r, g, b, a) weights, offset, coverage scale / offset.</summary>
+        static void DisplacementSelector(float v, out float4 coeffs, out float offset, out float covScale, out float covOffset)
+        {
+            int sel = v >= 1 ? math.min((int)v - 1, 10) : 10;
+            coeffs = float4.zero;
+            offset = 0;
+            covScale = 0;
+            covOffset = 1;
+            switch (sel)
+            {
+                case 0: coeffs = new float4(1, 0, 0, 0); covScale = 1; covOffset = 0; break;
+                case 1: coeffs = new float4(0, 1, 0, 0); covScale = 1; covOffset = 0; break;
+                case 2: coeffs = new float4(0, 0, 1, 0); covScale = 1; covOffset = 0; break;
+                case 3: coeffs = new float4(0, 0, 0, 1); break;
+                case 4: coeffs = new float4(0.2126f, 0.7152f, 0.0722f, 0); covScale = 1; covOffset = 0; break;
+                case 5: coeffs = new float4(1, 0, 0, 0); break;   // hue (not converted, like Skottie)
+                case 6: coeffs = new float4(0, 1, 0, 0); break;   // lightness
+                case 7: coeffs = new float4(0, 0, 1, 0); break;   // saturation
+                case 8: offset = 1; break;                        // full
+                case 9: offset = 0.5f; break;                     // half
+            }
+        }
+
 
         float EffectScalar(in EffectData e, int param, float t, float def) =>
             param < e.ParamCount ? P.Scalar(EffectParams[e.ParamFirst + param].Prop, t, def) : def;
@@ -457,6 +598,42 @@ namespace Mynell.Lottie.Scene
                         op.Kind = EffectOpKind.Sharpen;
                         op.X = 1 + amount * 0.01f;
                         op.Y = (1 - op.X) / 8f;
+                        break;
+                    }
+                    case EffectKind.DisplacementMap:
+                    {
+                        int mapLayer = FindLayerByInd(L.Comp, (int)math.round(EffectScalar(e, 0, t, -1)));
+                        if (mapLayer < 0) continue;
+                        float xsel = EffectScalar(e, 1, t, 0), ysel = EffectScalar(e, 3, t, 0);
+                        float2 scale = new float2(EffectScalar(e, 2, t, 0), EffectScalar(e, 4, t, 0));
+                        bool xConst = xsel >= 9 || xsel < 1, yConst = ysel >= 9 || ysel < 1;
+                        // AE quirk: two constant selectors (or no scale) do not displace.
+                        if ((xConst && yConst) || (math.abs(scale.x) < 1e-6f && math.abs(scale.y) < 1e-6f)) continue;
+                        op.Kind = EffectOpKind.DisplacementMap;
+                        DisplacementSelector(xsel, out float4 xc, out float xo, out float xcs, out float xco);
+                        DisplacementSelector(ysel, out float4 yc, out float yo, out float ycs, out float yco);
+                        op.A = xc;
+                        op.B = yc;
+                        op.C = new float4(xo - 0.5f, yo - 0.5f, xcs, ycs);
+                        op.D = new float4(xco, yco, scale.x * 2, scale.y * 2);
+                        op.Flags = (byte)(EffectScalar(e, 6, t, 0) != 0 ? 1 : 0);
+                        if (EffectScalar(e, 7, t, 0) != 0)
+                            op.OutputRect = TransformRectBounds(fx, new float4(-math.abs(scale), box + math.abs(scale)));
+                        // The map is the map layer as rendered in the composition, placed over the effect layer box
+                        // (1 center, 2 stretch, 3 tile); it is read from the aux surface (composition -> device).
+                        float2 mapSize = LayerBoxSize(Layers[mapLayer]);
+                        int behavior = (int)math.round(EffectScalar(e, 5, t, 1));
+                        Affine2 mapToEffect = behavior == 2 && mapSize.x > 0 && mapSize.y > 0
+                            ? Affine2.Scale(box.x / mapSize.x, box.y / mapSize.y)
+                            : behavior == 3 ? Affine2.Identity : Affine2.Translate((box.x - mapSize.x) * 0.5f, (box.y - mapSize.y) * 0.5f);
+                        Affine2 effectToMap = mapToEffect.Inverse();
+                        int data = Out.PaintFloats.Length;
+                        Out.PaintFloats.Add(effectToMap.a); Out.PaintFloats.Add(effectToMap.b); Out.PaintFloats.Add(effectToMap.c);
+                        Out.PaintFloats.Add(effectToMap.d); Out.PaintFloats.Add(effectToMap.tx); Out.PaintFloats.Add(effectToMap.ty);
+                        Out.PaintFloats.Add(compToDevice.a); Out.PaintFloats.Add(compToDevice.b); Out.PaintFloats.Add(compToDevice.c);
+                        Out.PaintFloats.Add(compToDevice.d); Out.PaintFloats.Add(compToDevice.tx); Out.PaintFloats.Add(compToDevice.ty);
+                        Out.PaintFloats.Add(mapSize.x); Out.PaintFloats.Add(mapSize.y); Out.PaintFloats.Add(behavior == 3 ? 1 : 0);
+                        op.Data = data;
                         break;
                     }
                     case EffectKind.Sphere:

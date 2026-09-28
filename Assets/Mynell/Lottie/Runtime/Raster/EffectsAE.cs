@@ -579,6 +579,41 @@ namespace Mynell.Lottie.Raster
             }
         }
 
+        /// <summary>
+        /// Skottie DisplacementMap: the content is sampled at an offset read from the map layer (same device position).
+        /// A = horizontal selector coefficients (r, g, b, a), B = vertical ones, C = (x offset, y offset, x coverage from
+        /// alpha, y coverage from alpha) and D = (x constant coverage, y constant coverage, scale x, scale y) in effect units.
+        /// </summary>
+        public static void DisplacementMap(in EffectOp op, in Target dst, in Target src, in Target map, float* d)
+        {
+            bool wrap = (op.Flags & 1) != 0;
+            float2 box = op.LayerSize;
+            var effectToMap = new Mynell.Lottie.Eval.Affine2(d[0], d[1], d[2], d[3], d[4], d[5]);
+            var mapToDevice = new Mynell.Lottie.Eval.Affine2(d[6], d[7], d[8], d[9], d[10], d[11]);
+            float2 mapSize = new float2(d[12], d[13]);
+            bool tileMap = d[14] != 0;
+            for (int y = 0; y < dst.H; y++)
+            {
+                uint* row = dst.Px + y * dst.W;
+                for (int x = 0; x < dst.W; x++)
+                {
+                    float2 p = dst.Center(x, y);
+                    // Map coordinates: repeated (tile) or clamped to the map layer box.
+                    float2 mq = effectToMap.Apply(op.DeviceToEffect.Apply(p));
+                    mq = tileMap ? new float2(Wrap(mq.x, mapSize.x, false), Wrap(mq.y, mapSize.y, false)) : math.clamp(mq, 0, mapSize);
+                    float4 m = Sample(map, mapToDevice.Apply(mq));
+                    float4 c = m.w > 0 ? new float4(m.xyz / m.w, m.w) : float4.zero;
+                    float dx = (math.dot(op.A, c) + op.C.x) * op.D.z;
+                    float dy = (math.dot(op.B, c) + op.C.y) * op.D.w;
+                    float cx = op.C.z * c.w + op.D.x, cy = op.C.w * c.w + op.D.y;
+                    float2 q = op.DeviceToEffect.Apply(p) + new float2(dx * cx, dy * cy);
+                    if (wrap) q = new float2(Wrap(q.x, box.x, false), Wrap(q.y, box.y, false));
+                    else if (q.x < 0 || q.y < 0 || q.x > box.x || q.y > box.y) { row[x] = 0; continue; }
+                    row[x] = PackPremul(Sample(src, op.EffectToDevice.Apply(q)));
+                }
+            }
+        }
+
         // ------------------------------------------------------------------ layer styles
 
         /// <summary>
