@@ -24,6 +24,9 @@ namespace Mynell.Lottie.Expressions
             {
                 case "time": v = top.Time; return true;
                 case "value": v = top.Value; return true;
+                case "textIndex" when top.TextTotal > 0: v = top.TextIndex; return true;
+                case "textTotal" when top.TextTotal > 0: v = top.TextTotal; return true;
+                case "selectorValue" when top.TextTotal > 0: v = 100; return true;
                 case "thisProperty": v = top.This; return true;
                 case "thisLayer": v = new LayerRef(this, layer); return true;
                 case "thisComp": v = new CompRef(this, layer.Comp); return true;

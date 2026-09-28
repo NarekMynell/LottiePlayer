@@ -57,6 +57,7 @@ namespace Mynell.Lottie.Expressions
             public double Time;      // seconds (comp time)
             public JsValue Value;    // pre-expression value
             public PropRef This;
+            public double TextIndex, TextTotal;  // text expression selectors (1-based index), 0 otherwise
         }
 
         sealed class CompHost
@@ -124,10 +125,93 @@ namespace Mynell.Lottie.Expressions
         }
 
         /// <summary>Bakes every expression of <paramref name="data"/> in place. Returns the number of baked properties.</summary>
-        internal static int Bake(LottieData data, List<JsonValue> compJson, Dictionary<int, int> propByJson, List<string> warnings)
+        internal static int Bake(LottieData data, List<JsonValue> compJson, Dictionary<int, int> propByJson, List<string> warnings,
+            List<(int selector, int layer, string code, int total)> textSelectors = null)
         {
             using var baker = new ExpressionBaker(data, compJson, propByJson, warnings);
-            return baker.Run();
+            int n = baker.Run();
+            if (textSelectors != null && textSelectors.Count > 0) n += baker.BakeTextSelectors(textSelectors);
+            return n;
+        }
+
+        /// <summary>
+        /// lottie-web TextExpressionSelectorProp: evaluates each expression selector for every frame of its layer and every
+        /// letter index (textIndex 1..textTotal, selectorValue 100) into a table of amounts (percent) in TextFloats.
+        /// </summary>
+        int BakeTextSelectors(List<(int selector, int layer, string code, int total)> jobs)
+        {
+            if (!_native.IsCreated)
+            {
+                _native = LottieNativeData.Create(_data);
+                _p = PropReader.Create(_native);
+                _scene = SceneBuilder.Create(_native, default, default);
+            }
+            var floats = new List<float>(_data.TextFloats);
+            var selectors = _data.TextSelectors;
+            int baked = 0;
+            foreach (var job in jobs)
+            {
+                if (job.layer < 0 || job.layer >= _layers.Length || _layers[job.layer] == null || job.total <= 0) continue;
+                var layer = _layers[job.layer];
+                var site = new Site { Prop = -1, Json = default, Layer = layer, Code = job.code, Seed = (uint)(job.selector * 2654435761u) };
+                try { site.Program = JsParser.Parse(job.code); }
+                catch (Exception e) { Fail(site, e); continue; }
+                var L = _data.Layers[job.layer];
+                double f0 = Math.Ceiling(Math.Max(L.InPoint, -1e6));
+                double f1 = Math.Floor(Math.Min(L.OutPoint, f0 + MaxSamples));
+                if (layer.Comp.Index == 0)
+                {
+                    f0 = Math.Max(f0, Math.Floor(_data.InPoint));
+                    f1 = Math.Min(f1, Math.Ceiling(_data.OutPoint));
+                }
+                if (f1 < f0) f1 = f0;
+                int frames = (int)(f1 - f0) + 1;
+                if ((long)frames * job.total > 2_000_000) frames = Math.Max(1, 2_000_000 / job.total);
+                int first = floats.Count;
+                for (int f = 0; f < frames && !site.Failed; f++)
+                for (int i = 0; i < job.total; i++)
+                    floats.Add(EvaluateTextSelector(site, f0 + f, i + 1, job.total));
+                if (site.Failed)
+                {
+                    floats.RemoveRange(first, floats.Count - first);
+                    continue;
+                }
+                var sd = selectors[job.selector];
+                sd.ExprFirst = first;
+                sd.ExprFrames = frames;
+                sd.ExprTotal = job.total;
+                sd.ExprT0 = (float)f0;
+                selectors[job.selector] = sd;
+                baked++;
+            }
+            _data.TextFloats = floats.ToArray();
+            return baked;
+        }
+
+        float EvaluateTextSelector(Site site, double frame, int index, int total)
+        {
+            if (site.Failed) return 100;
+            _stack.Add(new Frame { Site = site, Time = frame / _fr, Value = 100, TextIndex = index, TextTotal = total });
+            try
+            {
+                _it.Random.Seed(site.Seed + frame / _fr + index * 0.001);
+                var vars = _it.Run(site.Program);
+                JsValue r = vars.TryGetValue("$bm_rt", out var rt) && !rt.IsUndefined ? rt : _it.LastExpressionValue;
+                r = JsOps.Prim(_it, r);
+                if (r.Obj is JsArray arr) r = arr.Items.Count > 0 ? arr.Items[0] : (JsValue)0;
+                double d = JsOps.ToNumber(_it, r);
+                return double.IsNaN(d) || double.IsInfinity(d) ? 100 : (float)d;
+            }
+            catch (Exception e) when (e is JsRuntimeError || e is JsThrow || e is JsSyntaxError || e is InvalidCastException ||
+                                      e is IndexOutOfRangeException || e is ArgumentException || e is NullReferenceException)
+            {
+                Fail(site, e);
+                return 100;
+            }
+            finally
+            {
+                _stack.RemoveAt(_stack.Count - 1);
+            }
         }
 
         public void Dispose()

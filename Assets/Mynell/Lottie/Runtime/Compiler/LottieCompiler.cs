@@ -162,7 +162,7 @@ namespace Mynell.Lottie.Compiler
             {
                 try
                 {
-                    int baked = Expressions.ExpressionBaker.Bake(data, _compJson, _propByJson, _warnings);
+                    int baked = Expressions.ExpressionBaker.Bake(data, _compJson, _propByJson, _warnings, TextExpressionSelectors);
                     if (baked > 0) _warnings.Add($"{baked} of {_expressionCount} expression(s) evaluated and baked into keyframes.");
                 }
                 catch (Exception e)
@@ -284,6 +284,7 @@ namespace Mynell.Lottie.Compiler
             foreach (var l in layers)
             {
                 _currentShapeRoots = new int2(-1, 0);
+                _currentLayerIndex = first + li;
                 _layers[first + li] = CompileLayer(l, compIndex);
                 _layerNames[first + li] = l["nm"].AsString("");
                 _layerShapeRoots[first + li] = _currentShapeRoots;

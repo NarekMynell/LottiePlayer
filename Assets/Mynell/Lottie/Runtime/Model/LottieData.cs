@@ -48,6 +48,7 @@ namespace Mynell.Lottie.Model
         public float[] TextFloats = Array.Empty<float>();
         public TextDocKey[] TextDocKeys = Array.Empty<TextDocKey>();
         public TextAnimatorData[] TextAnimators = Array.Empty<TextAnimatorData>();
+        public TextSelectorData[] TextSelectors = Array.Empty<TextSelectorData>();
         public TextLayerInfo[] TextLayers = Array.Empty<TextLayerInfo>();
 
         /// <summary>Names ('nm') parallel to <see cref="Layers"/> and <see cref="Nodes"/>, for key paths.</summary>
@@ -86,7 +87,7 @@ namespace Mynell.Lottie.Model
             WriteArr(w, PModifiers); WriteArr(w, PStyles); WriteArr(w, POps); WriteArr(w, PIndices);
             WriteArr(w, Glyphs); WriteArr(w, GlyphContours); WriteArr(w, GlyphPoints); WriteArr(w, TextDocs);
             WriteArr(w, TextLetters); WriteArr(w, TextInts); WriteArr(w, TextFloats); WriteArr(w, TextDocKeys);
-            WriteArr(w, TextAnimators); WriteArr(w, TextLayers);
+            WriteArr(w, TextAnimators); WriteArr(w, TextLayers); WriteArr(w, TextSelectors);
             WriteStrings(w, LayerNames); WriteStrings(w, NodeNames); WriteArr(w, LayerShapeRoots);
             w.Write(Markers.Length);
             foreach (var m in Markers) { w.Write(m.Name ?? ""); w.Write(m.Time); w.Write(m.Duration); }
@@ -132,6 +133,7 @@ namespace Mynell.Lottie.Model
             d.TextDocs = ReadArr<TextDocData>(r); d.TextLetters = ReadArr<TextLetter>(r); d.TextInts = ReadArr<int>(r);
             d.TextFloats = ReadArr<float>(r); d.TextDocKeys = ReadArr<TextDocKey>(r); d.TextAnimators = ReadArr<TextAnimatorData>(r);
             d.TextLayers = ReadArr<TextLayerInfo>(r);
+            d.TextSelectors = ReadArr<TextSelectorData>(r);
             d.LayerNames = ReadStrings(r); d.NodeNames = ReadStrings(r); d.LayerShapeRoots = ReadArr<int2>(r);
             int mc = r.ReadInt32();
             d.Markers = new LottieMarker[mc];
@@ -222,6 +224,7 @@ namespace Mynell.Lottie.Model
         [ReadOnly] public NativeArray<TextDocKey> TextDocKeys;
         [ReadOnly] public NativeArray<TextAnimatorData> TextAnimators;
         [ReadOnly] public NativeArray<TextLayerInfo> TextLayers;
+        [ReadOnly] public NativeArray<TextSelectorData> TextSelectors;
         /// <summary>Spatial arc-length tables (runtime generated).</summary>
         [ReadOnly] public NativeArray<float> Tables;
         public float Width, Height, FrameRate, InPoint, OutPoint;
@@ -242,7 +245,7 @@ namespace Mynell.Lottie.Model
                 Glyphs = Make(d.Glyphs), GlyphContours = Make(d.GlyphContours), GlyphPoints = Make(d.GlyphPoints),
                 TextDocs = Make(d.TextDocs), TextLetters = Make(d.TextLetters), TextInts = Make(d.TextInts),
                 TextFloats = Make(d.TextFloats), TextDocKeys = Make(d.TextDocKeys), TextAnimators = Make(d.TextAnimators),
-                TextLayers = Make(d.TextLayers),
+                TextLayers = Make(d.TextLayers), TextSelectors = Make(d.TextSelectors),
             };
             // Keyframes get their spatial arc-length tables resolved here (lottie-web: buildBezierData, 150 samples).
             var keys = (KeyframeData[])d.Keys.Clone();
@@ -278,6 +281,7 @@ namespace Mynell.Lottie.Model
             POps.Dispose(); PIndices.Dispose(); Tables.Dispose();
             Glyphs.Dispose(); GlyphContours.Dispose(); GlyphPoints.Dispose(); TextDocs.Dispose(); TextLetters.Dispose();
             TextInts.Dispose(); TextFloats.Dispose(); TextDocKeys.Dispose(); TextAnimators.Dispose(); TextLayers.Dispose();
+            TextSelectors.Dispose();
             this = default;
         }
     }

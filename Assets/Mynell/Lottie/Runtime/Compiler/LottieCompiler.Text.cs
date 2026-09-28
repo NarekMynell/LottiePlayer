@@ -46,6 +46,10 @@ namespace Mynell.Lottie.Compiler
         readonly List<float> _textFloats = new List<float>();
         readonly List<TextDocKey> _textDocKeys = new List<TextDocKey>();
         readonly List<TextAnimatorData> _textAnimators = new List<TextAnimatorData>();
+        readonly List<TextSelectorData> _textSelectors = new List<TextSelectorData>();
+        /// <summary>Expression selectors to bake after compilation: (selector index, global layer index, code, letter count).</summary>
+        internal readonly List<(int selector, int layer, string code, int total)> TextExpressionSelectors = new List<(int, int, string, int)>();
+        int _currentLayerIndex = -1;
         readonly List<TextLayerInfo> _textLayers = new List<TextLayerInfo>();
         readonly HashSet<string> _missingFonts = new HashSet<string>();
 
@@ -327,10 +331,11 @@ namespace Mynell.Lottie.Compiler
                 PathReverseProp = -1,
             };
             var animators = new List<JsonValue>();
+            var expressionSelectors = new List<int>();
             foreach (var a in t["a"])
             {
                 animators.Add(a);
-                _textAnimators.Add(CompileTextAnimator(a));
+                _textAnimators.Add(CompileTextAnimator(a, expressionSelectors));
             }
             info.AnimatorCount = animators.Count;
             var m = t["m"];
@@ -344,6 +349,23 @@ namespace Mynell.Lottie.Compiler
             }
             info.DocKeyCount = _textDocKeys.Count - info.DocKeyFirst;
             if (t["d"].Has("x")) _expressionCount++;
+
+            // Expression selectors are evaluated for every letter index of the (first) text document.
+            if (expressionSelectors.Count > 0 && info.DocKeyCount > 0)
+            {
+                var firstDoc = _textDocs[_textDocKeys[info.DocKeyFirst].Doc];
+                for (int a = 0; a < animators.Count; a++)
+                {
+                    var ad = _textAnimators[info.AnimatorFirst + a];
+                    for (int k = 0; k < ad.SelCount; k++)
+                    {
+                        int sel = ad.SelFirst + k;
+                        if (_textSelectors[sel].Kind != 1) continue;
+                        TextExpressionSelectors.Add((sel, _currentLayerIndex, _pendingSelectorCode[sel], _textInts[firstDoc.AnimatorTotalFirst + a]));
+                        _expressionCount++;
+                    }
+                }
+            }
 
             var p = t["p"];
             if (p.IsObject && p.Has("m"))
@@ -363,12 +385,47 @@ namespace Mynell.Lottie.Compiler
             return _textLayers.Count - 1;
         }
 
-        TextAnimatorData CompileTextAnimator(JsonValue a)
+        /// <summary>The first selector of an animator ('s' is an object, or an array when there are several).</summary>
+        static JsonValue FirstSelector(JsonValue s) => s.IsArray ? (s.Count > 0 ? s[0] : default) : s;
+
+        TextAnimatorData CompileTextAnimator(JsonValue a, List<int> expressionSelectors)
         {
             var s = a["s"];
             var p = a["a"];
-            if (s["t"].AsInt(0) != 0) Unsupported("Text expression selectors");
+            var first = FirstSelector(s);
             var d = new TextAnimatorData
+            {
+                SelFirst = _textSelectors.Count,
+                Based = (byte)first["b"].AsInt(1),
+                Randomize = (byte)first["rn"].AsInt(0),
+                R = P(p["r"]), Rx = P(p["rx"]), Ry = P(p["ry"]), Sk = P(p["sk"]), Sa = P(p["sa"]),
+                Scale = P(p["s"], PropHint.VectorNoSpatial), Anchor = P(p["a"], PropHint.VectorNoSpatial),
+                Opacity = P(p["o"]), Position = P(p["p"], PropHint.VectorNoSpatial), StrokeWidth = P(p["sw"]),
+                StrokeColor = P(p["sc"], PropHint.VectorNoSpatial), FillColor = P(p["fc"], PropHint.VectorNoSpatial),
+                FillHue = P(p["fh"]), FillSat = P(p["fs"]), FillBright = P(p["fb"]), Tracking = P(p["t"]),
+            };
+            // Bodymovin exports several selectors as an array; they add up (Skottie / After Effects "Add" mode).
+            if (s.IsArray) foreach (var sel in s) CompileTextSelector(sel, expressionSelectors);
+            else if (s.IsObject) CompileTextSelector(s, expressionSelectors);
+            d.SelCount = _textSelectors.Count - d.SelFirst;
+            if (p.Has("bl")) Unsupported("Text animator blur");
+            return d;
+        }
+
+        void CompileTextSelector(JsonValue s, List<int> expressionSelectors)
+        {
+            if (!s.IsObject) return;
+            int kind = s["t"].AsInt(0);
+            if (kind == 1)
+            {
+                // Expression selector: its amount is baked per frame and letter (lottie-web TextExpressionSelectorProp).
+                expressionSelectors.Add(_textSelectors.Count);
+                _textSelectors.Add(new TextSelectorData { Kind = 1, ExprFirst = -1, S = -1, E = -1, O = -1, Xe = -1, Ne = -1, Sm = -1, A = -1 });
+                _pendingSelectorCode.Add(s["x"].AsString(""));
+                return;
+            }
+            if (kind != 0) Unsupported($"Text selector type {kind}");
+            _textSelectors.Add(new TextSelectorData
             {
                 S = s.Has("s") ? CompileProp(s["s"], PropHint.Scalar) : AddStatic(new[] { 0f }),
                 E = s.Has("e") ? CompileProp(s["e"], PropHint.Scalar) : -1,
@@ -378,19 +435,14 @@ namespace Mynell.Lottie.Compiler
                 Sm = s.Has("sm") ? CompileProp(s["sm"], PropHint.Scalar) : AddStatic(new[] { 100f }),
                 A = s.Has("a") ? CompileProp(s["a"], PropHint.Scalar) : AddStatic(new[] { 100f }),
                 Shape = (byte)s["sh"].AsInt(1),
-                Based = (byte)s["b"].AsInt(1),
                 Range = (byte)s["r"].AsInt(1),
-                Randomize = (byte)s["rn"].AsInt(0),
                 HasE = (byte)(s.Has("e") ? 1 : 0),
-                R = P(p["r"]), Rx = P(p["rx"]), Ry = P(p["ry"]), Sk = P(p["sk"]), Sa = P(p["sa"]),
-                Scale = P(p["s"], PropHint.VectorNoSpatial), Anchor = P(p["a"], PropHint.VectorNoSpatial),
-                Opacity = P(p["o"]), Position = P(p["p"], PropHint.VectorNoSpatial), StrokeWidth = P(p["sw"]),
-                StrokeColor = P(p["sc"], PropHint.VectorNoSpatial), FillColor = P(p["fc"], PropHint.VectorNoSpatial),
-                FillHue = P(p["fh"]), FillSat = P(p["fs"]), FillBright = P(p["fb"]), Tracking = P(p["t"]),
-            };
-            if (p.Has("bl")) Unsupported("Text animator blur");
-            return d;
+                ExprFirst = -1,
+            });
+            _pendingSelectorCode.Add(null);
         }
+
+        readonly List<string> _pendingSelectorCode = new List<string>();
 
         int P(JsonValue v, PropHint hint = PropHint.Scalar) => v.IsMissing ? -1 : CompileProp(v, hint);
 
@@ -665,7 +717,7 @@ namespace Mynell.Lottie.Compiler
             var rng = new System.Random(unchecked(text.GetHashCode() * 31 + count));
             for (int a = 0; a < nAnim; a++)
             {
-                var sel = animators[a]["s"];
+                var sel = FirstSelector(animators[a]["s"]);
                 int based = sel["b"].AsInt(1);
                 bool randomize = sel["rn"].AsInt(0) == 1;
                 var aa = animators[a]["a"];
@@ -739,6 +791,7 @@ namespace Mynell.Lottie.Compiler
             data.TextFloats = _textFloats.ToArray();
             data.TextDocKeys = _textDocKeys.ToArray();
             data.TextAnimators = _textAnimators.ToArray();
+            data.TextSelectors = _textSelectors.ToArray();
             data.TextLayers = _textLayers.ToArray();
         }
     }

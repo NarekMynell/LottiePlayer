@@ -19,6 +19,7 @@ namespace Mynell.Lottie.Scene
         [NativeDisableUnsafePtrRestriction] public TextDocKey* TextDocKeys;
         [NativeDisableUnsafePtrRestriction] public TextAnimatorData* TextAnimators;
         [NativeDisableUnsafePtrRestriction] public TextLayerInfo* TextLayers;
+        [NativeDisableUnsafePtrRestriction] public TextSelectorData* TextSelectors;
 
         void InitText(in LottieNativeData d)
         {
@@ -32,13 +33,24 @@ namespace Mynell.Lottie.Scene
             TextDocKeys = (TextDocKey*)d.TextDocKeys.GetUnsafeReadOnlyPtr();
             TextAnimators = (TextAnimatorData*)d.TextAnimators.GetUnsafeReadOnlyPtr();
             TextLayers = (TextLayerInfo*)d.TextLayers.GetUnsafeReadOnlyPtr();
+            TextSelectors = (TextSelectorData*)d.TextSelectors.GetUnsafeReadOnlyPtr();
         }
 
-        /// <summary>Per-frame values of one text animator (lottie-web TextAnimatorDataProperty + selector).</summary>
-        struct AnimatorFrame
+        /// <summary>Per-frame values of one text selector (lottie-web TextSelectorProp).</summary>
+        struct SelectorFrame
         {
             public float S, E, X1, Y1, X2, Y2, Smooth, Amount;
-            public byte Shape;
+            public byte Shape, Kind;
+            // Expression selectors: baked amounts (percent) of the two frames around t.
+            public int Expr0, Expr1, ExprTotal;
+            public float ExprLerp;
+        }
+
+        /// <summary>Per-frame values of one text animator (lottie-web TextAnimatorDataProperty + its selectors).</summary>
+        struct AnimatorFrame
+        {
+            public SelectorFrame Sel0, Sel1, Sel2, Sel3;
+            public int SelCount;
             public float R, Rx, Ry, Sk, Sa, Opacity, StrokeWidth, Hue, Sat, Bright, Tracking;
             public float2 Scale;
             public float3 Anchor, Position;
@@ -47,9 +59,22 @@ namespace Mynell.Lottie.Scene
             public byte HasSw, HasSc, HasFc, HasFh, HasFs, HasFb, HasT;
         }
 
-        AnimatorFrame EvalAnimator(in TextAnimatorData a, float t, int totalChars, int letterCount)
+        SelectorFrame EvalSelector(in TextSelectorData a, float t, int totalChars, int letterCount)
         {
-            var f = new AnimatorFrame();
+            var f = new SelectorFrame { Kind = a.Kind, Expr0 = -1, Expr1 = -1 };
+            if (a.Kind == 1)
+            {
+                if (a.ExprFirst >= 0 && a.ExprFrames > 0 && a.ExprTotal > 0)
+                {
+                    float x = math.clamp(t - a.ExprT0, 0, a.ExprFrames - 1);
+                    int k0 = (int)math.floor(x), k1 = math.min(k0 + 1, a.ExprFrames - 1);
+                    f.Expr0 = a.ExprFirst + k0 * a.ExprTotal;
+                    f.Expr1 = a.ExprFirst + k1 * a.ExprTotal;
+                    f.ExprLerp = x - k0;
+                    f.ExprTotal = a.ExprTotal;
+                }
+                return f;
+            }
             float sv = P.Scalar(a.S, t, 0);
             float ev = a.HasE != 0 ? P.Scalar(a.E, t, 100) : (a.Range == 2 ? letterCount : 100);
             float divisor = a.Range == 2 ? 1f : 100f / totalChars;
@@ -65,6 +90,20 @@ namespace Mynell.Lottie.Scene
             f.Smooth = P.Scalar(a.Sm, t, 100);
             f.Amount = P.Scalar(a.A, t, 100) * 0.01f;
             f.Shape = a.Shape;
+            return f;
+        }
+
+        AnimatorFrame EvalAnimator(in TextAnimatorData a, float t, int totalChars, int letterCount)
+        {
+            var f = new AnimatorFrame { SelCount = math.min(a.SelCount, 4) };
+            for (int k = 0; k < f.SelCount; k++)
+            {
+                var sf = EvalSelector(TextSelectors[a.SelFirst + k], t, totalChars, letterCount);
+                if (k == 0) f.Sel0 = sf;
+                else if (k == 1) f.Sel1 = sf;
+                else if (k == 2) f.Sel2 = sf;
+                else f.Sel3 = sf;
+            }
 
             const float Deg = math.PI / 180f;
             if (a.R >= 0) { f.HasR = 1; f.R = P.Scalar(a.R, t, 0) * Deg; }
@@ -85,9 +124,29 @@ namespace Mynell.Lottie.Scene
             return f;
         }
 
-        /// <summary>lottie-web TextSelectorProp.getMult.</summary>
-        static float GetMult(in AnimatorFrame f, float ind)
+        /// <summary>
+        /// Amount of an animator for a letter: its single selector (lottie-web), or its selectors added and clamped to
+        /// [-1, 1] (After Effects "Add" mode, as Skottie).
+        /// </summary>
+        float GetMult(in AnimatorFrame f, float ind)
         {
+            if (f.SelCount == 0) return 1;
+            if (f.SelCount == 1) return SelectorMult(f.Sel0, ind);
+            float m = SelectorMult(f.Sel0, ind) + SelectorMult(f.Sel1, ind);
+            if (f.SelCount > 2) m += SelectorMult(f.Sel2, ind);
+            if (f.SelCount > 3) m += SelectorMult(f.Sel3, ind);
+            return math.clamp(m, -1f, 1f);
+        }
+
+        /// <summary>lottie-web TextSelectorProp.getMult / TextExpressionSelectorProp.getMult.</summary>
+        float SelectorMult(in SelectorFrame f, float ind)
+        {
+            if (f.Kind == 1)
+            {
+                if (f.Expr0 < 0) return 1;
+                int i = math.clamp((int)ind, 0, f.ExprTotal - 1);
+                return math.lerp(TextFloats[f.Expr0 + i], TextFloats[f.Expr1 + i], f.ExprLerp) * 0.01f;
+            }
             float s = f.S, e = f.E;
             float mult = 0;
             switch (f.Shape)

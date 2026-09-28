@@ -13,7 +13,7 @@ namespace Mynell.Lottie.Model
     public static class LottieFormat
     {
         /// <summary>Bump whenever the compiled layout changes (forces re-import).</summary>
-        public const int Version = 4;
+        public const int Version = 5;
         /// <summary>Number of samples lottie-web uses for bezier length tables.</summary>
         public const int CurveSegments = 150;
         /// <summary>lottie-web's ellipse / rounded corner constant.</summary>
@@ -312,14 +312,28 @@ namespace Mynell.Lottie.Model
         public int Doc;
     }
 
-    /// <summary>A text animator: range selector + animated properties (prop indices, -1 when absent).</summary>
+    /// <summary>A text animator: its selectors (range selectors in <see cref="LottieData.TextSelectors"/>) + animated properties
+    /// (prop indices, -1 when absent). Letters are indexed by the first selector's basis.</summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct TextAnimatorData
     {
-        public int S, E, O, Xe, Ne, Sm, A;
-        public byte Shape, Based, Range, Randomize;
-        public byte HasE, R0; public ushort R1;
+        public int SelFirst, SelCount;
+        public byte Based, Randomize, R0, R1;
         public int R, Rx, Ry, Sk, Sa, Scale, Anchor, Opacity, Position, StrokeWidth, StrokeColor, FillColor, FillHue, FillSat, FillBright, Tracking;
+    }
+
+    /// <summary>
+    /// A text selector: a range selector (props S, E, O, Xe, Ne, Sm, A), or an expression selector whose amounts were baked
+    /// per frame and letter index into <see cref="LottieData.TextFloats"/> (ExprFirst: ExprFrames × ExprTotal values from
+    /// frame ExprT0).
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TextSelectorData
+    {
+        public int S, E, O, Xe, Ne, Sm, A;
+        public byte Shape, Range, HasE, Kind;    // Kind: 0 range, 1 expression
+        public int ExprFirst, ExprFrames, ExprTotal;
+        public float ExprT0;
     }
 
     [StructLayout(LayoutKind.Sequential)]
