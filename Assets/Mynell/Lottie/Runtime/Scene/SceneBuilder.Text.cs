@@ -52,11 +52,11 @@ namespace Mynell.Lottie.Scene
             public SelectorFrame Sel0, Sel1, Sel2, Sel3;
             public int SelCount;
             public float R, Rx, Ry, Sk, Sa, Opacity, StrokeWidth, Hue, Sat, Bright, Tracking;
-            public float2 Scale;
+            public float2 Scale, Blur;
             public float3 Anchor, Position;
             public float4 StrokeColor, FillColor;
             public byte HasR, HasRx, HasRy, HasSk, HasScale, HasAnchor, HasOpacity, HasPosition;
-            public byte HasSw, HasSc, HasFc, HasFh, HasFs, HasFb, HasT;
+            public byte HasSw, HasSc, HasFc, HasFh, HasFs, HasFb, HasT, HasBl;
         }
 
         SelectorFrame EvalSelector(in TextSelectorData a, float t, int totalChars, int letterCount)
@@ -121,6 +121,7 @@ namespace Mynell.Lottie.Scene
             if (a.FillSat >= 0) { f.HasFs = 1; f.Sat = P.Scalar(a.FillSat, t, 0) * 0.01f; }
             if (a.FillBright >= 0) { f.HasFb = 1; f.Bright = P.Scalar(a.FillBright, t, 0) * 0.01f; }
             if (a.Tracking >= 0) { f.HasT = 1; f.Tracking = P.Scalar(a.Tracking, t, 0); }
+            if (a.Blur >= 0) { f.HasBl = 1; f.Blur = P.Vec2(a.Blur, t, float2.zero); }
             return f;
         }
 
@@ -567,6 +568,33 @@ namespace Mynell.Lottie.Scene
                 float4 strokeColor = new float4(math.round(math.saturate(sc) * 255f) / 255f, 1);
                 Affine2 letterToDevice = m.Then(world);
 
+                // Animator blur (Skottie): each glyph blurred in its own space, sigma = blur × 0.3.
+                float2 blur = float2.zero;
+                for (int a = 0; a < na; a++)
+                {
+                    var f = anim[a];
+                    if (f.HasBl != 0) blur += f.Blur * GetMult(f, TextInts[lt.AnIndexFirst + a]);
+                }
+                int blurGroup = -1;
+                if (math.any(blur > 0.01f))
+                {
+                    blurGroup = BeginGroup(1f, 0, 0, clip, 7);
+                    var bd = Out.Groups[blurGroup];
+                    bd.EffectFirst = Out.Effects.Length;
+                    float2 sigma = math.max(blur, 0) * 0.3f;
+                    Out.Effects.Add(new EffectOp
+                    {
+                        Kind = EffectOpKind.GaussianBlur,
+                        Z = sigma.x * math.length(new float2(letterToDevice.a, letterToDevice.b)),
+                        W = sigma.y * math.length(new float2(letterToDevice.c, letterToDevice.d)),
+                        TableR = -1, TableG = -1, TableB = -1, TableA = -1, TableRGB = -1,
+                        Data = -1,
+                        OutputRect = EmptyRect,
+                    });
+                    bd.EffectCount = 1;
+                    Out.Groups[blurGroup] = bd;
+                }
+
                 // Group opacity applies to fill + stroke together.
                 int grp = -1;
                 float paintOpacity = opacity;
@@ -580,6 +608,7 @@ namespace Mynell.Lottie.Scene
                 if (stroke) EmitGlyphStroke(g, glyphScale, letterToDevice, strokeColor, math.max(0, sw), paintOpacity, clip);
                 if (fill && stroke && !strokeOnTop) EmitGlyphFill(g, glyphScale, letterToDevice, fillColor, paintOpacity, clip);
                 if (grp >= 0) EndGroup(grp);
+                if (blurGroup >= 0) EndGroup(blurGroup);
             }
             path.Dispose();
             justify.Dispose();

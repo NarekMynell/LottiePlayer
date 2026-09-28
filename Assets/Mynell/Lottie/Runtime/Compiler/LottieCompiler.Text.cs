@@ -452,12 +452,12 @@ namespace Mynell.Lottie.Compiler
                 Opacity = P(p["o"]), Position = P(p["p"], PropHint.VectorNoSpatial), StrokeWidth = P(p["sw"]),
                 StrokeColor = P(p["sc"], PropHint.VectorNoSpatial), FillColor = P(p["fc"], PropHint.VectorNoSpatial),
                 FillHue = P(p["fh"]), FillSat = P(p["fs"]), FillBright = P(p["fb"]), Tracking = P(p["t"]),
+                Blur = P(p["bl"], PropHint.VectorNoSpatial),
             };
             // Bodymovin exports several selectors as an array; they add up (Skottie / After Effects "Add" mode).
             if (s.IsArray) foreach (var sel in s) CompileTextSelector(sel, expressionSelectors);
             else if (s.IsObject) CompileTextSelector(s, expressionSelectors);
             d.SelCount = _textSelectors.Count - d.SelFirst;
-            if (p.Has("bl")) Unsupported("Text animator blur");
             return d;
         }
 

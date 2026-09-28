@@ -13,7 +13,7 @@ namespace Mynell.Lottie.Model
     public static class LottieFormat
     {
         /// <summary>Bump whenever the compiled layout changes (forces re-import).</summary>
-        public const int Version = 6;
+        public const int Version = 7;
         /// <summary>Number of samples lottie-web uses for bezier length tables.</summary>
         public const int CurveSegments = 150;
         /// <summary>lottie-web's ellipse / rounded corner constant.</summary>
@@ -322,6 +322,7 @@ namespace Mynell.Lottie.Model
         public int SelFirst, SelCount;
         public byte Based, Randomize, R0, R1;
         public int R, Rx, Ry, Sk, Sa, Scale, Anchor, Opacity, Position, StrokeWidth, StrokeColor, FillColor, FillHue, FillSat, FillBright, Tracking;
+        public int Blur;                         // 'bl' (x, y), -1
     }
 
     /// <summary>
