@@ -350,6 +350,86 @@ namespace Mynell.Lottie.Tests
             }
         }
 
+        // ------------------------------------------------------------------ After Effects features beyond lottie-web
+
+        [Test]
+        public void LayerStyle_DropShadowIsDrawnBelowTheLayer()
+        {
+            // Angle 135 at distance 10: the shadow is offset by (7.07, 7.07).
+            string style = ",\"sy\":[{\"ty\":1,\"nm\":\"Drop Shadow\",\"c\":{\"a\":0,\"k\":[0,0,1,1]},\"o\":{\"a\":0,\"k\":100}," +
+                           "\"a\":{\"a\":0,\"k\":135},\"s\":{\"a\":0,\"k\":0},\"d\":{\"a\":0,\"k\":10}}]";
+            var px = Render(Comp(ShapeLayer(Rect(0, 0, 40, 40) + "," + Fill(1, 1, 1), Transform, 1, style)), 0);
+            AssertColor(new Color32(255, 255, 255, 255), At(px, 50, 50), 0, "layer");
+            AssertColor(new Color32(0, 0, 255, 255), At(px, 73, 73), 1, "shadow");
+            AssertColor(new Color32(0, 0, 0, 0), At(px, 25, 25), 0, "opposite side");
+        }
+
+        [Test]
+        public void Effect_InvertTurnsRedIntoCyan()
+        {
+            string invert = ",\"ef\":[{\"ty\":5,\"nm\":\"Invert\",\"mn\":\"ADBE Invert\",\"ef\":[{\"ty\":7,\"nm\":\"Channel\",\"v\":{\"a\":0,\"k\":1}}," +
+                            "{\"ty\":0,\"nm\":\"Blend With Original\",\"v\":{\"a\":0,\"k\":0}}]}]";
+            var px = Render(Comp(ShapeLayer(Rect(0, 0, 40, 40) + "," + Fill(1, 0, 0), Transform, 1, invert)), 0);
+            AssertColor(new Color32(0, 255, 255, 255), At(px, 50, 50), 1, "inverted");
+            AssertColor(new Color32(0, 0, 0, 0), At(px, 10, 10), 0, "outside");
+        }
+
+        [Test]
+        public void SetMatte_UsesAnotherLayerAsAlphaMatte()
+        {
+            // A hidden ellipse (layer 2) mattes the square: its corners disappear.
+            string matte = ",\"ef\":[{\"ty\":28,\"nm\":\"Set Matte\",\"mn\":\"ADBE Set Matte3\",\"ef\":[" +
+                           "{\"ty\":10,\"nm\":\"Take Matte From Layer\",\"v\":{\"a\":0,\"k\":2}},{\"ty\":7,\"nm\":\"Use For Matte\",\"v\":{\"a\":0,\"k\":4}}," +
+                           "{\"ty\":7,\"nm\":\"Invert Matte\",\"v\":{\"a\":0,\"k\":0}}]}]";
+            string ellipse = "{\"ty\":\"el\",\"p\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[40,40]}}," + Fill(0, 1, 0);
+            string layers = ShapeLayer(Rect(0, 0, 40, 40) + "," + Fill(1, 0, 0), Transform, 1, matte) + "," +
+                            ShapeLayer(ellipse, Transform, 2, ",\"hd\":true");
+            var px = Render(Comp(layers), 0);
+            AssertColor(new Color32(255, 0, 0, 255), At(px, 50, 50), 0, "inside the matte");
+            AssertColor(new Color32(0, 0, 0, 0), At(px, 31, 31), 0, "square corner outside the ellipse");
+        }
+
+        [Test]
+        public void Camera_ShowsA3DLayerInPerspective()
+        {
+            // A square tilted around x under a camera: its near and far edges get different widths.
+            string camera = "{\"ty\":13,\"ind\":1,\"ip\":0,\"op\":60,\"st\":0,\"pe\":{\"a\":0,\"k\":80},\"ks\":{" +
+                            "\"p\":{\"a\":0,\"k\":[50,50,-80]},\"a\":{\"a\":0,\"k\":[50,50,0]},\"rx\":{\"a\":0,\"k\":0}," +
+                            "\"ry\":{\"a\":0,\"k\":0},\"rz\":{\"a\":0,\"k\":0},\"or\":{\"a\":0,\"k\":[0,0,0]}}}";
+            string solid = "{\"ty\":1,\"ind\":2,\"ddd\":1,\"sw\":50,\"sh\":50,\"sc\":\"#ffffff\",\"ip\":0,\"op\":60,\"st\":0,\"ks\":{" +
+                           "\"p\":{\"a\":0,\"k\":[50,50,0]},\"a\":{\"a\":0,\"k\":[25,25,0]},\"s\":{\"a\":0,\"k\":[100,100,100]}," +
+                           "\"rx\":{\"a\":0,\"k\":50},\"ry\":{\"a\":0,\"k\":0},\"rz\":{\"a\":0,\"k\":0},\"or\":{\"a\":0,\"k\":[0,0,0]}," +
+                           "\"o\":{\"a\":0,\"k\":100}}}";
+            var px = Render(Comp(camera + "," + solid, 60, ",\"ddd\":1"), 0);
+            int top = -1, bottom = -1;
+            for (int y = 0; y < 100; y++)
+            {
+                int covered = 0;
+                for (int x = 0; x < 100; x++) if ((px[y * 100 + x] >> 24) > 128) covered++;
+                if (covered == 0) continue;
+                if (top < 0) top = covered;
+                bottom = covered;
+            }
+            Assert.Greater(top, 0, "the layer is visible");
+            Assert.Greater(Math.Abs(top - bottom), 4, $"perspective: top row {top} px, bottom row {bottom} px");
+        }
+
+        [Test]
+        public void Emoji_UseTheColourEmojiFont()
+        {
+            if (Text.EmojiFont.SystemFontPath() == null) Assert.Ignore("No colour emoji font on this system.");
+            string text = "{\"ty\":5,\"ind\":1,\"ip\":0,\"op\":60,\"st\":0," + Transform + ",\"t\":{\"d\":{\"k\":[{\"s\":{\"s\":40," +
+                          "\"f\":\"NoSuchFont\",\"t\":\"\\ud83d\\ude00\",\"j\":0,\"tr\":0,\"lh\":48,\"ls\":0,\"fc\":[0,0,0]},\"t\":0}]}," +
+                          "\"p\":{},\"m\":{\"g\":1,\"a\":{\"a\":0,\"k\":[0,0]}},\"a\":[]}}";
+            string json = Comp(text, 60, ",\"fonts\":{\"list\":[{\"fName\":\"NoSuchFont\",\"fFamily\":\"NoSuchFont\",\"fStyle\":\"Regular\",\"ascent\":75}]}");
+            var data = Compiler.LottieCompiler.Compile(json);
+            Assert.IsTrue(Array.Exists(data.Glyphs, g => g.Image >= 0), "an emoji glyph bitmap was created");
+            var px = Render(json, 0);
+            int colored = 0;
+            foreach (var p in px) if ((p >> 24) > 200 && (p & 255) > 150 && ((p >> 8) & 255) > 100) colored++;
+            Assert.Greater(colored, 50, "the yellow face is drawn");
+        }
+
         [Test]
         public void InvalidJson_Throws()
         {
