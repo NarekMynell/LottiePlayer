@@ -1,0 +1,17 @@
+{
+    "name": "Mynell.Lottie.Samples",
+    "rootNamespace": "Mynell.Lottie.Samples",
+    "references": [
+        "Mynell.Lottie",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

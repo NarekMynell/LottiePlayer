@@ -1,0 +1,15 @@
+{
+  "name": "com.mynell.lottie",
+  "displayName": "Mynell Lottie",
+  "version": "1.0.0",
+  "unity": "6000.0",
+  "description": "Fast, accurate Lottie (Bodymovin) animation player. Imports .json and .lottie files and renders them with Burst jobs into textures for uGUI and world space. Supports expressions, text, images, masks, mattes, effects and merge paths.",
+  "keywords": [ "lottie", "bodymovin", "animation", "vector", "ui", "after effects", "dotlottie" ],
+  "author": { "name": "Mynell" },
+  "dependencies": {
+    "com.unity.burst": "1.8.0",
+    "com.unity.collections": "2.1.0",
+    "com.unity.mathematics": "1.3.0",
+    "com.unity.ugui": "2.0.0"
+  }
+}

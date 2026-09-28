@@ -1,0 +1,25 @@
+{
+    "name": "Mynell.Lottie.Timeline",
+    "rootNamespace": "Mynell.Lottie.Timeline",
+    "references": [
+        "Mynell.Lottie",
+        "Unity.Timeline"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "MYNELL_LOTTIE_TIMELINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.timeline",
+            "expression": "1.0.0",
+            "define": "MYNELL_LOTTIE_TIMELINE"
+        }
+    ],
+    "noEngineReferences": false
+}
