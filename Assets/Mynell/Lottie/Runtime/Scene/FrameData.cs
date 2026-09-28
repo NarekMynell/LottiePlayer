@@ -85,7 +85,8 @@ namespace Mynell.Lottie.Scene
         public byte MaskInitOne;     // mask target starts white (first mask subtract / intersect)
         public byte Collapsed;       // no offscreen needed: children draw straight into the parent
         public byte Reason;          // debug: why the group exists
-        public ushort R1;
+        public byte NonLocal;        // effects read the source anywhere: the surface is not limited to the parent's
+        public byte R1;
         public int Parent;
         public int EffectFirst;      // range in FrameData.Effects applied to the group's content
         public int EffectCount;
@@ -97,21 +98,43 @@ namespace Mynell.Lottie.Scene
         public float4 MaskBounds;
     }
 
-    public enum EffectOpKind : byte { Fill, Tint, Tritone, Levels, GaussianBlur, DropShadow }
+    public enum EffectOpKind : byte
+    {
+        // lottie-web's SVG filters (applied before the layer masks, like the SVG renderer).
+        Fill, Tint, Tritone, Levels, GaussianBlur, DropShadow,
+        // After Effects effects rendered like Skottie (applied after the layer masks).
+        ColorMatrix, HslMatrix, Saturate, Brightness, Contrast, Threshold, BlackAndWhite, ColorTables,
+        GradientMap, GradientRamp, LinearMask, SweepMask, MotionTile, CornerPin, Bulge, DirectionalBlur, Sharpen,
+        FractalNoise, Sphere, DisplacementMap,
+        // Layer styles.
+        StyleShadow, StyleGlow,
+    }
 
     /// <summary>A layer effect with parameters resolved for the current frame (device units).</summary>
     public struct EffectOp
     {
         public EffectOpKind Kind;
-        public byte Flags;           // blur: 1 = repeat edges; drop shadow: 1 = shadow only
-        public ushort R0;
+        public byte Flags;           // blur: 1 = repeat edges; drop shadow: 1 = shadow only; styles: 1 = inner
+        /// <summary>1: applied after the layer masks (After Effects order), 0: before them (lottie-web).</summary>
+        public byte PostMask;
+        public byte R0;
         /// <summary>Colours / parameters (meaning per kind): Fill(A = rgb + opacity), Tint(A = black, B = white, X = amount),
         /// Tritone(A = shadows, B = midtones, C = highlights, X = blend with original), DropShadow(A = colour + opacity,
         /// X/Y = offset, Z = sigma x, W = sigma y), GaussianBlur(Z = sigma x, W = sigma y).</summary>
-        public float4 A, B, C;
+        public float4 A, B, C, D;
         public float X, Y, Z, W;
         /// <summary>Levels: 5 × 256 floats in <see cref="FrameData.PaintFloats"/> (R, G, B, A, composite RGB); -1 when a table is identity.</summary>
         public int TableR, TableG, TableB, TableA, TableRGB;
+        /// <summary>Kind-specific parameter block in <see cref="FrameData.PaintFloats"/> (-1 = none).</summary>
+        public int Data;
+        /// <summary>Device pixels -> effect space (layer or composition coordinates, depending on the layer type).</summary>
+        public Affine2 DeviceToEffect;
+        /// <summary>Effect space -> device pixels.</summary>
+        public Affine2 EffectToDevice;
+        /// <summary>Size of the layer box in effect space.</summary>
+        public float2 LayerSize;
+        /// <summary>Device bounds the output is limited to (x0, y0, x1, y1); unbounded when empty.</summary>
+        public float4 OutputRect;
     }
 
     /// <summary>Per-instance, per-frame scene output. Lists are reused across frames.</summary>

@@ -314,9 +314,13 @@ namespace Mynell.Lottie
             var handle = Schedule(anim, absoluteFrame, compToDevice, pixels, width, height);
             JobHandle.ScheduleBatchedJobs();
             // JobHandle.Complete() runs jobs that have not started yet on the calling thread, one after another:
-            // let the worker threads pick up the bands first.
+            // let the worker threads pick up the bands first (bounded, in case they are busy with other work).
             if (LastBandCount > 1)
-                while (!handle.IsCompleted) System.Threading.Thread.SpinWait(64);
+            {
+                long deadline = System.Diagnostics.Stopwatch.GetTimestamp() + System.Diagnostics.Stopwatch.Frequency / 50;
+                while (!handle.IsCompleted && System.Diagnostics.Stopwatch.GetTimestamp() < deadline)
+                    System.Threading.Thread.SpinWait(64);
+            }
             Complete();
         }
 

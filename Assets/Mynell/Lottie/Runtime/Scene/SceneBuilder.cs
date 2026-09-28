@@ -194,10 +194,14 @@ namespace Mynell.Lottie.Scene
             if (!IsRenderable(L.Kind)) return;
             float opacity = P.Scalar(L.Transform.Opacity, compTime, 100f) * 0.01f;
             // Transform effects (lottie-web localTransforms): content -> effect matrix -> layer transform.
-            bool hasTransformEffect = TransformEffects(L, compTime, out Affine2 effectMatrix, out float effectOpacity);
-            opacity *= effectOpacity;
+            bool hasTransformEffect = TransformEffects(L, compTime, false, out Affine2 effectMatrix, out float effectOpacity);
+            // After Effects applies the effects of shape / text layers after the layer transform (composition space).
+            bool hasCompTransform = TransformEffects(L, compTime, true, out Affine2 compEffectMatrix, out float compEffectOpacity);
+            opacity *= effectOpacity * compEffectOpacity;
             if (opacity <= 0) return; // lottie-web hideOnTransparent
-            Affine2 world = LayerWorld(li, compTime).Then(compToDevice);
+            Affine2 world = LayerWorld(li, compTime);
+            if (hasCompTransform) world = world.Then(compEffectMatrix);
+            world = world.Then(compToDevice);
             if (hasTransformEffect) world = effectMatrix.Then(world);
 
             bool hasMask = HasActiveMasks(L);
@@ -209,6 +213,15 @@ namespace Mynell.Lottie.Scene
 
             bool needsGroup = hasMask || hasMatte || L.BlendMode != 0 || opacity < 1 || hasEffects ||
                               precompNeedsIsolation || rotatedClip;
+            bool nonLocal = hasEffects && HasNonLocalEffects(L);
+            if (nonLocal)
+            {
+                // Content anywhere in the layer box can be moved into view (tiles, spheres, corner pins...):
+                // render the source beyond the visible area (bounded to a few view sizes).
+                float4 box = TransformRectBounds(EffectSpace(L, world, compToDevice), new float4(0, 0, LayerBoxSize(L)));
+                float2 grow = clip.zw - clip.xy;
+                clip = Union(clip, Intersect(box, new float4(clip.xy - grow, clip.zw + grow)));
+            }
             int g = -1;
             float itemOpacity = 1f;
             if (needsGroup)
@@ -218,8 +231,9 @@ namespace Mynell.Lottie.Scene
                 {
                     var gd = Out.Groups[g];
                     gd.EffectFirst = Out.Effects.Length;
-                    EmitEffects(L, compTime, world);
+                    EmitEffects(L, compTime, world, compToDevice);
                     gd.EffectCount = Out.Effects.Length - gd.EffectFirst;
+                    gd.NonLocal = (byte)(nonLocal ? 1 : 0);
                     Out.Groups[g] = gd;
                 }
             }
@@ -295,165 +309,6 @@ namespace Mynell.Lottie.Scene
             for (int i = 0; i < L.MaskCount; i++)
                 if (Masks[L.MaskFirst + i].Mode != MaskMode.None) return true;
             return false;
-        }
-
-        bool HasRenderableEffects(in LayerData L)
-        {
-            for (int i = 0; i < L.EffectCount; i++)
-            {
-                var e = Effects[L.EffectFirst + i];
-                if (e.Enabled == 0) continue;
-                switch (e.Kind)
-                {
-                    case EffectKind.GaussianBlur:
-                    case EffectKind.DropShadow:
-                    case EffectKind.Fill:
-                    case EffectKind.Tint:
-                    case EffectKind.Tritone:
-                    case EffectKind.ProLevels:
-                        return true;
-                }
-            }
-            return false;
-        }
-
-        float EffectScalar(in EffectData e, int param, float t, float def) =>
-            param < e.ParamCount ? P.Scalar(EffectParams[e.ParamFirst + param].Prop, t, def) : def;
-
-        float4 EffectColor(in EffectData e, int param, float t, float4 def) =>
-            param < e.ParamCount ? P.Vec4(EffectParams[e.ParamFirst + param].Prop, t, def) : def;
-
-        float2 EffectPoint(in EffectData e, int param, float t, float2 def) =>
-            param < e.ParamCount ? P.Vec2(EffectParams[e.ParamFirst + param].Prop, t, def) : def;
-
-        /// <summary>lottie-web TransformEffect: combined matrix and opacity of the layer's Transform effects.</summary>
-        bool TransformEffects(in LayerData L, float t, out Affine2 matrix, out float opacity)
-        {
-            matrix = Affine2.Identity;
-            opacity = 1f;
-            bool any = false;
-            for (int i = 0; i < L.EffectCount; i++)
-            {
-                var e = Effects[L.EffectFirst + i];
-                if (e.Enabled == 0 || e.Kind != EffectKind.Transform) continue;
-                float2 anchor = EffectPoint(e, 0, t, float2.zero);
-                float2 position = EffectPoint(e, 1, t, float2.zero);
-                bool uniform = EffectScalar(e, 2, t, 1) == 1;
-                float scaleH = EffectScalar(e, 3, t, 100);
-                float scaleW = uniform ? scaleH : EffectScalar(e, 4, t, 100);
-                float skew = EffectScalar(e, 5, t, 0);
-                float skewAxis = EffectScalar(e, 6, t, 0);
-                float rotation = EffectScalar(e, 7, t, 0);
-                Affine2 m = Affine2.Translate(-anchor.x, -anchor.y);
-                m = m.Then(Affine2.Scale(scaleW * 0.01f, scaleH * 0.01f));
-                if (rotation != 0) m = m.Then(Affine2.Rotate(-math.radians(rotation)));
-                if (skew != 0) m = m.Then(Affine2.SkewFromAxis(-math.radians(skew), math.radians(skewAxis + 90)));
-                m = m.Then(Affine2.Translate(position.x, position.y));
-                // lottie-web: localTransforms[0] * localTransforms[1] * ... * layer matrix.
-                matrix = any ? matrix.Then(m) : m;
-                opacity *= EffectScalar(e, 8, t, 100) * 0.01f;
-                any = true;
-            }
-            return any;
-        }
-
-        /// <summary>Resolves the layer's pixel effects into <see cref="FrameData.Effects"/> (device units).</summary>
-        void EmitEffects(in LayerData L, float t, in Affine2 world)
-        {
-            float sx = math.length(new float2(world.a, world.b));
-            float sy = math.length(new float2(world.c, world.d));
-            for (int i = 0; i < L.EffectCount; i++)
-            {
-                var e = Effects[L.EffectFirst + i];
-                if (e.Enabled == 0) continue;
-                var op = new EffectOp { TableR = -1, TableG = -1, TableB = -1, TableA = -1, TableRGB = -1 };
-                switch (e.Kind)
-                {
-                    case EffectKind.Fill:
-                    {
-                        op.Kind = EffectOpKind.Fill;
-                        float4 c = EffectColor(e, 2, t, new float4(1, 0, 0, 1));
-                        op.A = new float4(c.xyz, EffectScalar(e, 6, t, 1));
-                        break;
-                    }
-                    case EffectKind.Tint:
-                        op.Kind = EffectOpKind.Tint;
-                        op.A = EffectColor(e, 0, t, new float4(0, 0, 0, 1));
-                        op.B = EffectColor(e, 1, t, new float4(1, 1, 1, 1));
-                        op.X = EffectScalar(e, 2, t, 100) * 0.01f;
-                        break;
-                    case EffectKind.Tritone:
-                        op.Kind = EffectOpKind.Tritone;
-                        op.C = EffectColor(e, 0, t, new float4(1, 1, 1, 1));   // highlights
-                        op.B = EffectColor(e, 1, t, new float4(0.5f, 0.5f, 0.5f, 1)); // midtones
-                        op.A = EffectColor(e, 2, t, new float4(0, 0, 0, 1));   // shadows
-                        op.X = EffectScalar(e, 3, t, 0) * 0.01f;
-                        break;
-                    case EffectKind.ProLevels:
-                        op.Kind = EffectOpKind.Levels;
-                        op.TableR = LevelsTable(e, 10, t);
-                        op.TableG = LevelsTable(e, 17, t);
-                        op.TableB = LevelsTable(e, 24, t);
-                        op.TableA = LevelsTable(e, 31, t);
-                        op.TableRGB = LevelsTable(e, 3, t);
-                        if (op.TableR < 0 && op.TableG < 0 && op.TableB < 0 && op.TableA < 0 && op.TableRGB < 0) continue;
-                        break;
-                    case EffectKind.GaussianBlur:
-                    {
-                        op.Kind = EffectOpKind.GaussianBlur;
-                        float sigma = EffectScalar(e, 0, t, 0) * 0.3f; // lottie-web kBlurrinessToSigma
-                        int dims = (int)EffectScalar(e, 1, t, 1);
-                        op.Z = dims == 3 ? 0 : sigma * sx;
-                        op.W = dims == 2 ? 0 : sigma * sy;
-                        op.Flags = (byte)(EffectScalar(e, 2, t, 0) == 1 ? 1 : 0);
-                        if (!(op.Z > 0.01f) && !(op.W > 0.01f)) continue;
-                        break;
-                    }
-                    case EffectKind.DropShadow:
-                    {
-                        op.Kind = EffectOpKind.DropShadow;
-                        float4 c = EffectColor(e, 0, t, new float4(0, 0, 0, 1));
-                        // lottie-web: flood colour rounded to bytes, opacity in 0..255.
-                        c.xyz = math.round(math.saturate(c.xyz) * 255f) / 255f;
-                        op.A = new float4(c.xyz, math.saturate(EffectScalar(e, 1, t, 127.5f) / 255f));
-                        float distance = EffectScalar(e, 3, t, 5);
-                        float angle = math.radians(EffectScalar(e, 2, t, 135) - 90);
-                        float2 offset = world.ApplyVector(new float2(distance * math.cos(angle), distance * math.sin(angle)));
-                        op.X = offset.x;
-                        op.Y = offset.y;
-                        float sigma = EffectScalar(e, 4, t, 0) / 4f;
-                        op.Z = sigma * sx;
-                        op.W = sigma * sy;
-                        op.Flags = (byte)(EffectScalar(e, 5, t, 0) == 1 ? 1 : 0);
-                        break;
-                    }
-                    default:
-                        continue;
-                }
-                Out.Effects.Add(op);
-            }
-        }
-
-        /// <summary>lottie-web SVGProLevelsFilter.getTableValue: 256-entry table, or -1 for the identity mapping.</summary>
-        int LevelsTable(in EffectData e, int first, float t)
-        {
-            if (first + 4 >= e.ParamCount) return -1;
-            float inBlack = EffectScalar(e, first, t, 0), inWhite = EffectScalar(e, first + 1, t, 1), gamma = EffectScalar(e, first + 2, t, 1);
-            float outBlack = EffectScalar(e, first + 3, t, 0), outWhite = EffectScalar(e, first + 4, t, 1);
-            if (inBlack == 0 && inWhite == 1 && gamma == 1 && outBlack == 0 && outWhite == 1) return -1;
-            int offset = Out.PaintFloats.Length;
-            float mn = math.min(inBlack, inWhite), mx = math.max(inBlack, inWhite);
-            float outDelta = outWhite - outBlack, inDelta = inWhite - inBlack;
-            for (int k = 0; k < 256; k++)
-            {
-                float perc = k / 255f;
-                float v;
-                if (perc <= mn) v = inDelta < 0 ? outWhite : outBlack;
-                else if (perc >= mx) v = inDelta < 0 ? outBlack : outWhite;
-                else v = outBlack + outDelta * math.pow((perc - inBlack) / inDelta, 1f / gamma);
-                Out.PaintFloats.Add(v);
-            }
-            return offset;
         }
 
         bool CompHasBlendModes(int compIndex)

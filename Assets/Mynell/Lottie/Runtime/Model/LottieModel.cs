@@ -206,11 +206,32 @@ namespace Mynell.Lottie.Model
         public int Reserved;
     }
 
+    /// <summary>
+    /// Effect type: the Bodymovin 'ty' value, or (64+) an effect identified by its After Effects match name ('mn'),
+    /// or (100+) a layer style ('sy' entry, 100 + its 'ty').
+    /// </summary>
     public enum EffectKind : byte
     {
         Unknown = 0, Tint = 20, Fill = 21, Stroke = 22, Tritone = 23, ProLevels = 24,
         DropShadow = 25, RadialWipe = 26, DisplacementMap = 27, Matte3 = 28, GaussianBlur = 29,
-        Twirl = 30, MeshWarp = 31, Wavy = 32, Spherize = 33, Puppet = 34, Transform = 35
+        Twirl = 30, MeshWarp = 31, Wavy = 32, Spherize = 33, Puppet = 34, Transform = 35,
+
+        GradientRamp = 64, HueSaturation = 65, BrightnessContrast = 66, Invert = 67, Threshold = 68,
+        BlackAndWhite = 69, CCToner = 70, ShiftChannels = 71, EasyLevels = 72, LinearWipe = 73,
+        VenetianBlinds = 74, MotionTile = 75, CornerPin = 76, Bulge = 77, DirectionalBlur = 78,
+        Sharpen = 79, FractalNoise = 80, Sphere = 81,
+
+        StyleStroke = 100, StyleDropShadow = 101, StyleInnerShadow = 102, StyleOuterGlow = 103,
+        StyleInnerGlow = 104, StyleBevelEmboss = 105, StyleSatin = 106, StyleColorOverlay = 107,
+        StyleGradientOverlay = 108,
+    }
+
+    [Flags]
+    public enum EffectFlags : ushort
+    {
+        None = 0,
+        /// <summary>Identified by its After Effects match name (rendered with After Effects semantics, not lottie-web's).</summary>
+        ByMatchName = 1 << 0,
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -218,7 +239,7 @@ namespace Mynell.Lottie.Model
     {
         public EffectKind Kind;
         public byte Enabled;
-        public ushort Reserved;
+        public EffectFlags Flags;
         /// <summary>Range in the effect-parameter table.</summary>
         public int ParamFirst, ParamCount;
     }

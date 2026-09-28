@@ -8,7 +8,7 @@ namespace Mynell.Lottie.Raster
     /// Layer effects applied to an isolated group surface (premultiplied RGBA8), following the SVG filters
     /// lottie-web builds (feColorMatrix / feComponentTransfer / feGaussianBlur / drop shadow chain).
     /// </summary>
-    public static unsafe class Effects
+    public static unsafe partial class Effects
     {
         /// <summary>How far an effect can push content outside its source bounds (device pixels, x / y).</summary>
         public static float2 Reach(in EffectOp op)
@@ -19,6 +19,15 @@ namespace Mynell.Lottie.Raster
                     return new float2(op.Z, op.W) * 3f + 2f;
                 case EffectOpKind.DropShadow:
                     return math.abs(new float2(op.X, op.Y)) + new float2(op.Z, op.W) * 3f + 2f;
+                case EffectOpKind.StyleShadow:
+                    return (op.Flags & 1) != 0 ? float2.zero : math.abs(new float2(op.X, op.Y)) + new float2(op.Z, op.W) * 3f + 2f;
+                case EffectOpKind.StyleGlow:
+                    if ((op.Flags & 1) != 0) return float2.zero;
+                    return (op.Flags & 4) != 0 ? new float2(op.Z, op.W) + 2f : new float2(op.Z, op.W) * 3f + 2f;
+                case EffectOpKind.DirectionalBlur:
+                    return math.abs(op.A.xy) * op.X * 3f + 2f;
+                case EffectOpKind.Sharpen:
+                    return new float2(1, 1);
                 default:
                     return float2.zero;
             }

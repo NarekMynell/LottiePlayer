@@ -33,7 +33,8 @@ namespace Mynell.Lottie
 
         /// <summary>
         /// Optional persistent status (4 values): [0..1] hash of the last rendered frame, [2] hash valid, [3] output:
-        /// 1 when the frame was (or has to be) rasterized, 0 when it was identical to the previous one.
+        /// 1 when the frame was (or has to be) rasterized, 2 when it has to be rasterized as a single band (effects
+        /// reading pixels anywhere in a layer), 0 when it was identical to the previous one.
         /// </summary>
         [NativeDisableUnsafePtrRestriction] public ulong* Status;
         /// <summary>Skip rasterization when the frame content equals the previous one (requires <see cref="Status"/>).</summary>
@@ -60,7 +61,7 @@ namespace Mynell.Lottie
                 Status[0] = lo;
                 Status[1] = hi;
                 Status[2] = 1;
-                Status[3] = same ? 0UL : 1UL;
+                Status[3] = same ? 0UL : HasNonLocalEffects() ? 2UL : 1UL;
                 if (same) return;
             }
             var fr = new FrameRenderer
@@ -79,6 +80,13 @@ namespace Mynell.Lottie
             };
             if (Stage == 2 || PrepareOnly) fr.Prepare();
             else fr.Render();
+        }
+
+        bool HasNonLocalEffects()
+        {
+            for (int i = 0; i < Frame.Effects.Length; i++)
+                if (Effects.IsNonLocal(Frame.Effects[i].Kind)) return true;
+            return false;
         }
 
         /// <summary>Hash of everything that determines the output pixels.</summary>
@@ -129,6 +137,13 @@ namespace Mynell.Lottie
         {
             if (ThreadLog != null) *ThreadLog = _threadIndex;
             if (Status != null && Status[3] == 0) return;
+            int y0 = Y0, y1 = Y1;
+            if (Status != null && Status[3] == 2)
+            {
+                // Non-local effects: the first band renders the whole frame.
+                if (Y0 != 0) return;
+                y1 = Height;
+            }
             var fr = new FrameRenderer
             {
                 F = Frame,
@@ -142,7 +157,7 @@ namespace Mynell.Lottie
                 ImageInfo = (int4*)ImageInfo.GetUnsafeReadOnlyPtr(),
                 ImageCount = ImageInfo.Length,
             };
-            fr.ExecuteBand(Y0, Y1);
+            fr.ExecuteBand(y0, y1);
         }
     }
 }

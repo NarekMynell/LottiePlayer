@@ -301,19 +301,23 @@ namespace Mynell.Lottie.Raster
                         if (gd.EffectCount > 0)
                         {
                             float2 reach = float2.zero;
-                            bool fillsTransparent = false;
                             for (int k = 0; k < gd.EffectCount; k++)
                             {
                                 var op = F.Effects[gd.EffectFirst + k];
-                                reach += Effects.Reach(op);
-                                // Levels raising the alpha of transparent pixels paints the whole effect region.
-                                if (op.Kind == EffectOpKind.Levels && op.TableA >= 0 && F.PaintFloats[op.TableA] > 0.5f / 255f) fillsTransparent = true;
-                            }
-                            if (!SceneBuilder.IsEmpty(content))
-                            {
-                                // SVG default filter region: the bounding box grown by 10% on each side.
-                                if (fillsTransparent) reach += (content.zw - content.xy) * 0.1f;
-                                content += new float4(-reach, reach);
+                                if (!SceneBuilder.IsEmpty(op.OutputRect))
+                                {
+                                    // The effect draws its own region (motion tile output, sphere, corner pin quad...);
+                                    // the source content stays in the surface.
+                                    content = SceneBuilder.Union(content, op.OutputRect);
+                                    continue;
+                                }
+                                float2 r = Effects.Reach(op);
+                                // Levels raising the alpha of transparent pixels paints the whole effect region
+                                // (SVG default filter region: the bounding box grown by 10% on each side).
+                                if (op.Kind == EffectOpKind.Levels && op.TableA >= 0 && F.PaintFloats[op.TableA] > 0.5f / 255f && !SceneBuilder.IsEmpty(content))
+                                    r += (content.zw - content.xy) * 0.1f;
+                                if (!SceneBuilder.IsEmpty(content)) content += new float4(-r, r);
+                                reach += r;
                             }
                             G.GroupReach[g] += reach;
                         }
@@ -444,7 +448,7 @@ namespace Mynell.Lottie.Raster
                             int2 halo = (int2)math.ceil(G.GroupReach[g]);
                             parentRect = IntersectI(new int4(parentRect.xy - halo, parentRect.zw + halo), new int4(0, 0, RootW, RootH));
                         }
-                        int4 rect = parentTarget >= 0 ? IntersectI(G.GroupRect[g], parentRect) : new int4();
+                        int4 rect = parentTarget >= 0 ? (gd.NonLocal != 0 ? G.GroupRect[g] : IntersectI(G.GroupRect[g], parentRect)) : new int4();
                         if (parentTarget < 0 || EmptyI(rect))
                         {
                             c = SkipGroup(c, g);
@@ -515,13 +519,22 @@ namespace Mynell.Lottie.Raster
 
         // ================================================================== group compositing
 
-        void ApplyEffects(in GroupData gd, int surfaceIndex)
+        /// <summary>Applies the group's effects to its surface. Returns true when the layer mask was baked into it.</summary>
+        bool ApplyEffects(in GroupData gd, in StackEntry e)
         {
+            bool maskBaked = false;
             for (int k = 0; k < gd.EffectCount; k++)
             {
                 EffectOp op = F.Effects[gd.EffectFirst + k];
-                Surface s = R.Surfaces[surfaceIndex];
+                if (op.PostMask != 0 && !maskBaked && e.Mask >= 0)
+                {
+                    // After Effects order: masks, then effects and styles.
+                    BakeMask(e);
+                    maskBaked = true;
+                }
+                Surface s = R.Surfaces[e.Layer];
                 int n = s.W * s.H;
+                float* floats = (float*)F.PaintFloats.GetUnsafeReadOnlyPtr();
                 switch (op.Kind)
                 {
                     case EffectOpKind.GaussianBlur:
@@ -544,17 +557,108 @@ namespace Mynell.Lottie.Raster
                         R.Arena.ResizeUninitialized(mark);
                         break;
                     }
-                    default:
-                        Effects.ColorOp(op, Px(s), n, (float*)F.PaintFloats.GetUnsafeReadOnlyPtr());
+                    case EffectOpKind.Fill:
+                    case EffectOpKind.Tint:
+                    case EffectOpKind.Tritone:
+                    case EffectOpKind.Levels:
+                        Effects.ColorOp(op, Px(s), n, floats);
                         break;
+                    case EffectOpKind.ColorMatrix:
+                    case EffectOpKind.HslMatrix:
+                        Effects.ColorMatrix(op, Target(s), floats + op.Data, op.Kind == EffectOpKind.HslMatrix);
+                        break;
+                    case EffectOpKind.Saturate:
+                    case EffectOpKind.Brightness:
+                    case EffectOpKind.Contrast:
+                    case EffectOpKind.BlackAndWhite:
+                        Effects.PremulFilter(op, Target(s));
+                        break;
+                    case EffectOpKind.Threshold:
+                        Effects.Threshold(op, Target(s));
+                        break;
+                    case EffectOpKind.ColorTables:
+                        Effects.ColorTables(op, Target(s), floats);
+                        break;
+                    case EffectOpKind.GradientMap:
+                        Effects.GradientMap(op, Target(s), floats + op.Data);
+                        break;
+                    case EffectOpKind.GradientRamp:
+                        Effects.GradientRamp(op, Target(s));
+                        break;
+                    case EffectOpKind.LinearMask:
+                        Effects.LinearMask(op, Target(s));
+                        break;
+                    case EffectOpKind.SweepMask:
+                        Effects.SweepMask(op, Target(s));
+                        break;
+                    case EffectOpKind.FractalNoise:
+                        Effects.FractalNoise(op, Target(s), floats + op.Data);
+                        break;
+                    case EffectOpKind.MotionTile:
+                    case EffectOpKind.CornerPin:
+                    case EffectOpKind.Bulge:
+                    case EffectOpKind.Sphere:
+                    case EffectOpKind.DirectionalBlur:
+                    case EffectOpKind.Sharpen:
+                    {
+                        // These read the unmodified source anywhere while writing the output.
+                        int mark = R.Arena.Length;
+                        R.Arena.ResizeUninitialized(mark + n);
+                        uint* copy = (uint*)R.Arena.GetUnsafePtr() + mark;
+                        var dst = Target(s);
+                        UnsafeUtility.MemCpy(copy, dst.Px, (long)n * 4);
+                        var src = dst;
+                        src.Px = copy;
+                        switch (op.Kind)
+                        {
+                            case EffectOpKind.MotionTile: Effects.MotionTile(op, dst, src); break;
+                            case EffectOpKind.CornerPin: Effects.CornerPin(op, dst, src, floats + op.Data); break;
+                            case EffectOpKind.Bulge: Effects.Bulge(op, dst, src); break;
+                            case EffectOpKind.Sphere: Effects.Sphere(op, dst, src, floats + op.Data); break;
+                            case EffectOpKind.DirectionalBlur: Effects.DirectionalBlur(op, dst, src); break;
+                            default: Effects.Sharpen(op, dst, src); break;
+                        }
+                        R.Arena.ResizeUninitialized(mark);
+                        break;
+                    }
+                    case EffectOpKind.StyleShadow:
+                    case EffectOpKind.StyleGlow:
+                    {
+                        int mark = R.Arena.Length;
+                        R.Arena.ResizeUninitialized(mark + 2 * n + 4 * math.max(s.W, s.H) + 4);
+                        uint* tmp = (uint*)R.Arena.GetUnsafePtr() + mark;
+                        if (op.Kind == EffectOpKind.StyleShadow) Effects.StyleShadow(op, Target(s), tmp);
+                        else Effects.StyleGlow(op, Target(s), tmp);
+                        R.Arena.ResizeUninitialized(mark);
+                        break;
+                    }
                 }
+            }
+            return maskBaked;
+        }
+
+        Effects.Target Target(in Surface s) => new Effects.Target { Px = Px(s), X0 = s.X0, Y0 = s.Y0, W = s.W, H = s.H };
+
+        /// <summary>Multiplies the layer surface by its mask (the mask then no longer applies at composite time).</summary>
+        void BakeMask(in StackEntry e)
+        {
+            Surface s = R.Surfaces[e.Layer];
+            Surface m = R.Surfaces[e.Mask];
+            uint* px = Px(s);
+            byte* mp = MaskPx(m);
+            int n = s.W * s.H;
+            for (int i = 0; i < n; i++)
+            {
+                uint k = mp[i];
+                if (k == 255) continue;
+                px[i] = k == 0 ? 0 : Px8.Mul(px[i], k);
             }
         }
 
         void CompositeGroup(in StackEntry e, int dstIndex)
         {
             GroupData gd = F.Groups[e.Group];
-            if (gd.EffectCount > 0) ApplyEffects(gd, e.Layer);
+            bool maskBaked = gd.EffectCount > 0 && ApplyEffects(gd, e);
             Surface src = R.Surfaces[e.Layer];
             Surface dst = R.Surfaces[dstIndex];
             int4 rect = IntersectI(src.Rect, dst.Rect);
@@ -568,7 +672,7 @@ namespace Mynell.Lottie.Raster
             uint* sp = Px(src);
             uint* dp = Px(dst);
             uint* mp = e.Matte >= 0 ? Px(matte) : null;
-            byte* kp = e.Mask >= 0 ? MaskPx(mask) : null;
+            byte* kp = e.Mask >= 0 && !maskBaked ? MaskPx(mask) : null;
             if (Stats != null) Stats[1] += (long)(rect.z - rect.x) * (rect.w - rect.y);
 
             for (int y = rect.y; y < rect.w; y++)

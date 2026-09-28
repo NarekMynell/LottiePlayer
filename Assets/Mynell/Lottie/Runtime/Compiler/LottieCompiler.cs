@@ -181,8 +181,11 @@ namespace Mynell.Lottie.Compiler
         static readonly string[] s_LayerStyleNames =
             { "Stroke", "Drop Shadow", "Inner Shadow", "Outer Glow", "Inner Glow", "Bevel and Emboss", "Satin", "Color Overlay", "Gradient Overlay" };
 
-        /// <summary>Layer styles ("sy") are not rendered (like lottie-web): report them.</summary>
-        void ReportLayerStyles(JsonValue sy)
+        /// <summary>Layer style properties, compiled in this order as effect parameters.</summary>
+        internal static readonly string[] StyleKeys = { "c", "o", "a", "s", "d", "ch", "sr", "so", "r", "j", "bm", "no", "lc" };
+
+        /// <summary>Layer styles ("sy") become effects after the layer's own effects (After Effects / Skottie order).</summary>
+        void CompileStyles(JsonValue sy)
         {
             if (!sy.IsArray) return;
             foreach (var style in sy)
@@ -190,9 +193,25 @@ namespace Mynell.Lottie.Compiler
                 if (!style.IsObject) continue;
                 int ty = style["ty"].AsInt(-1);
                 string name = ty >= 0 && ty < s_LayerStyleNames.Length ? s_LayerStyleNames[ty] : $"type {ty}";
-                Unsupported($"Layer style '{name}'");
+                var kind = (EffectKind)(100 + math.clamp(ty, 0, 100));
+                if (kind != EffectKind.StyleDropShadow && kind != EffectKind.StyleInnerShadow && kind != EffectKind.StyleOuterGlow &&
+                    kind != EffectKind.StyleInnerGlow && kind != EffectKind.StyleColorOverlay && kind != EffectKind.StyleStroke)
+                {
+                    Unsupported($"Layer style '{name}'");
+                    continue;
+                }
+                var ed = new EffectData { Kind = kind, Enabled = 1, ParamFirst = _effectParams.Count };
+                foreach (var key in StyleKeys)
+                {
+                    var v = style[key];
+                    int prop = v.IsMissing ? -1 : CompileProp(v, key == "c" ? PropHint.Vector : PropHint.Scalar);
+                    _effectParams.Add(new EffectParam { Type = (byte)(key == "c" ? 2 : 0), Prop = prop });
+                }
+                ed.ParamCount = _effectParams.Count - ed.ParamFirst;
+                _effects.Add(ed);
             }
         }
+
         internal void Warn(string warning) { if (_warnings.Count < 64) _warnings.Add(warning); }
 
         static int[] ParseVersion(string v)
@@ -341,7 +360,6 @@ namespace Mynell.Lottie.Compiler
             if (l["hd"].AsBool()) L.Flags |= LayerFlags.Hidden;
             if (l["ao"].AsInt(0) == 1) L.Flags |= LayerFlags.AutoOrient;
             if (l["ddd"].AsInt(0) == 1) L.Flags |= LayerFlags.Is3D;
-            ReportLayerStyles(l["sy"]);
 
             var ks = l["ks"];
             if (ks.IsObject) L.Flags |= LayerFlags.HasTransform;
@@ -400,14 +418,13 @@ namespace Mynell.Lottie.Compiler
                 L.Flags |= LayerFlags.HasMasks;
             }
 
-            // Effects.
+            // Effects, then layer styles.
+            L.EffectFirst = _effects.Count;
             var ef = l["ef"];
-            if (ef.IsArray && ef.Count > 0)
-            {
-                L.EffectFirst = _effects.Count;
+            if (ef.IsArray)
                 foreach (var e in ef) CompileEffect(e);
-                L.EffectCount = _effects.Count - L.EffectFirst;
-            }
+            CompileStyles(l["sy"]);
+            L.EffectCount = _effects.Count - L.EffectFirst;
             return L;
         }
 
@@ -489,11 +506,70 @@ namespace Mynell.Lottie.Compiler
             return md;
         }
 
+        /// <summary>After Effects match names of the effects rendered beyond lottie-web's set (Skottie's list).</summary>
+        static readonly Dictionary<string, EffectKind> s_EffectsByMatchName = new Dictionary<string, EffectKind>
+        {
+            { "ADBE Black&White", EffectKind.BlackAndWhite },
+            { "ADBE Brightness & Contrast 2", EffectKind.BrightnessContrast },
+            { "ADBE Bulge", EffectKind.Bulge },
+            { "ADBE Corner Pin", EffectKind.CornerPin },
+            { "ADBE Displacement Map", EffectKind.DisplacementMap },
+            { "ADBE Drop Shadow", EffectKind.DropShadow },
+            { "ADBE Easy Levels2", EffectKind.EasyLevels },
+            { "ADBE Fill", EffectKind.Fill },
+            { "ADBE Fractal Noise", EffectKind.FractalNoise },
+            { "ADBE Gaussian Blur 2", EffectKind.GaussianBlur },
+            { "ADBE Geometry2", EffectKind.Transform },
+            { "ADBE HUE SATURATION", EffectKind.HueSaturation },
+            { "ADBE Invert", EffectKind.Invert },
+            { "ADBE Linear Wipe", EffectKind.LinearWipe },
+            { "ADBE Motion Blur", EffectKind.DirectionalBlur },
+            { "ADBE Pro Levels2", EffectKind.ProLevels },
+            { "ADBE Radial Wipe", EffectKind.RadialWipe },
+            { "ADBE Ramp", EffectKind.GradientRamp },
+            { "ADBE Set Matte3", EffectKind.Matte3 },
+            { "ADBE Sharpen", EffectKind.Sharpen },
+            { "ADBE Shift Channels", EffectKind.ShiftChannels },
+            { "ADBE Stroke", EffectKind.Stroke },
+            { "ADBE Threshold2", EffectKind.Threshold },
+            { "ADBE Tile", EffectKind.MotionTile },
+            { "ADBE Tint", EffectKind.Tint },
+            { "ADBE Tritone", EffectKind.Tritone },
+            { "ADBE Venetian Blinds", EffectKind.VenetianBlinds },
+            { "CC Sphere", EffectKind.Sphere },
+            { "CC Toner", EffectKind.CCToner },
+        };
+
+        /// <summary>Effects rendered by this player (the others are reported as unsupported).</summary>
+        internal static bool IsRenderedEffect(EffectKind k) => k switch
+        {
+            EffectKind.Tint or EffectKind.Fill or EffectKind.Stroke or EffectKind.Tritone or EffectKind.ProLevels or
+            EffectKind.DropShadow or EffectKind.RadialWipe or EffectKind.DisplacementMap or EffectKind.Matte3 or
+            EffectKind.GaussianBlur or EffectKind.Transform or
+            EffectKind.GradientRamp or EffectKind.HueSaturation or EffectKind.BrightnessContrast or EffectKind.Invert or
+            EffectKind.Threshold or EffectKind.BlackAndWhite or EffectKind.CCToner or EffectKind.ShiftChannels or
+            EffectKind.EasyLevels or EffectKind.LinearWipe or EffectKind.VenetianBlinds or EffectKind.MotionTile or
+            EffectKind.CornerPin or EffectKind.Bulge or EffectKind.DirectionalBlur or EffectKind.Sharpen or
+            EffectKind.FractalNoise or EffectKind.Sphere => true,
+            _ => false,
+        };
+
         void CompileEffect(JsonValue e)
         {
+            int ty = e["ty"].AsInt(0);
+            string mn = e["mn"].AsString("");
+            var kind = (EffectKind)math.clamp(ty, 0, 63);
+            var flags = EffectFlags.None;
+            // lottie-web dispatches on 'ty'; effects it doesn't know are identified by match name (like Skottie).
+            if (!IsRenderedEffect(kind) && s_EffectsByMatchName.TryGetValue(mn, out var byName))
+            {
+                kind = byName;
+                flags |= EffectFlags.ByMatchName;
+            }
             var ed = new EffectData
             {
-                Kind = (EffectKind)math.clamp(e["ty"].AsInt(0), 0, 255),
+                Kind = kind,
+                Flags = flags,
                 Enabled = (byte)(e["en"].AsInt(1) != 0 ? 1 : 0),
                 ParamFirst = _effectParams.Count,
             };
@@ -507,32 +583,15 @@ namespace Mynell.Lottie.Compiler
                 _effectParams.Add(new EffectParam { Type = (byte)type, Prop = prop });
             }
             ed.ParamCount = _effectParams.Count - ed.ParamFirst;
-            switch (ed.Kind)
+            if (IsRenderedEffect(kind) || kind == EffectKind.Unknown) { }
+            else if (kind == (EffectKind)5)
             {
-                case EffectKind.Tint:
-                case EffectKind.Fill:
-                case EffectKind.Tritone:
-                case EffectKind.ProLevels:
-                case EffectKind.DropShadow:
-                case EffectKind.GaussianBlur:
-                case EffectKind.Transform:
-                case EffectKind.Unknown: // slider controls & co (expression helpers)
-                    break;
-                case (EffectKind)5:
-                {
-                    // Expression controls (sliders, points, layers...) render nothing; other custom effects are unsupported.
-                    string mn = e["mn"].AsString("");
-                    if (!(mn.EndsWith(" Control") || mn.StartsWith("Pseudo/") || mn.Length == 0))
-                        Unsupported($"Effect '{e["nm"].AsString(mn)}' ({mn})");
-                    break;
-                }
-                case EffectKind.Puppet:
-                    Warn("Puppet effect is ignored (lottie-web behaviour).");
-                    break;
-                default:
-                    Unsupported($"Effect type {(int)ed.Kind}");
-                    break;
+                // Expression controls (sliders, points, layers...) render nothing; other custom effects are unsupported.
+                if (!(mn.EndsWith(" Control") || mn.StartsWith("Pseudo/") || mn.Length == 0))
+                    Unsupported($"Effect '{e["nm"].AsString(mn)}' ({mn})");
             }
+            else if (kind == EffectKind.Puppet) Warn("Puppet effect is ignored (lottie-web behaviour).");
+            else Unsupported(mn.Length > 0 ? $"Effect '{e["nm"].AsString(mn)}' ({mn})" : $"Effect type {ty}");
             _effects.Add(ed);
         }
 
