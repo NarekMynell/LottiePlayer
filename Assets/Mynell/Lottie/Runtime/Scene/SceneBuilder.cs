@@ -392,7 +392,7 @@ namespace Mynell.Lottie.Scene
                     EmitImage(L, world, clip, itemOpacity);
                     break;
                 case LayerKind.Text:
-                    RenderText(L, compTime, world, clip, itemOpacity);
+                    RenderText(L, compTime, world, clip, itemOpacity, depth);
                     break;
                 case LayerKind.Precomp:
                 {

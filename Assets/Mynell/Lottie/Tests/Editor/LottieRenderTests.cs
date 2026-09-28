@@ -431,6 +431,32 @@ namespace Mynell.Lottie.Tests
         }
 
         [Test]
+        public void Text_WithoutAnyFont_DrawsNothingAndDoesNotCrash()
+        {
+            // Like WebGL: no font file and no emoji font, so no letter gets a glyph.
+            string text = "{\"ty\":5,\"ind\":1,\"ip\":0,\"op\":60,\"st\":0," + Transform + ",\"t\":{\"d\":{\"k\":[{\"s\":{\"s\":40," +
+                          "\"f\":\"NoSuchFont\",\"t\":\"Hi \\ud83d\\ude00\\u2764\\ufe0f\\ud83d\\udc4d\\ud83c\\udffd\\udc00\",\"j\":0,\"tr\":0,\"lh\":48,\"ls\":0,\"fc\":[0,0,0]},\"t\":0}]}," +
+                          "\"p\":{},\"m\":{\"g\":1,\"a\":{\"a\":0,\"k\":[0,0]}},\"a\":[]}}";
+            string json = Comp(text, 60, ",\"fonts\":{\"list\":[{\"fName\":\"NoSuchFont\",\"fFamily\":\"NoSuchFont\",\"fStyle\":\"Regular\",\"ascent\":75}]}");
+            var options = new Compiler.LottieCompileOptions { FontResolver = _ => null, EmojiFontPath = "/no/such/emoji.ttf" };
+            var data = Compiler.LottieCompiler.Compile(json, options);
+            Assert.Greater(data.TextLetters.Length, 0);
+            foreach (var letter in data.TextLetters) Assert.AreEqual(-1, letter.Glyph, "letters without a font have no glyph");
+            using var anim = LottieAnimation.FromData(data);
+            using var state = new LottieRenderState();
+            var px = new NativeArray<uint>(100 * 100, Allocator.Persistent);
+            try
+            {
+                state.RenderImmediate(anim, 0, LottieRenderState.FitTransform(anim.Width, anim.Height, 100, 100, false), px, 100, 100);
+                foreach (var p in px) Assert.AreEqual(0u, p, "nothing is drawn");
+            }
+            finally
+            {
+                px.Dispose();
+            }
+        }
+
+        [Test]
         public void InvalidJson_Throws()
         {
             Assert.That(() => LottieAnimation.FromJson("{ not json"), Throws.Exception);

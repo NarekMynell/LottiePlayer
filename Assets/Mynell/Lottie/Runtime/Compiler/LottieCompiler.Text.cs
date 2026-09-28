@@ -252,13 +252,13 @@ namespace Mynell.Lottie.Compiler
             }
             var file = LoadFontFile(font);
             int result = -1;
-            int firstCp = ch.Length > 0 ? char.ConvertToUtf32(ch, 0) : 0;
+            int firstCp = ch.Length == 0 ? 0 : char.IsSurrogatePair(ch, 0) ? char.ConvertToUtf32(ch, 0) : ch[0];
             // Emoji presentation (like the browser): pictographs, sequences with VS16, or characters the font lacks.
             bool wantsEmoji = ch.IndexOf('\uFE0F') >= 0 || firstCp >= 0x1F000 || (file != null && file.GlyphIndex(firstCp) == 0 && firstCp > 0x7F);
-            if (wantsEmoji && EmojiGlyph(ch, out result, out advance))
+            if (wantsEmoji && EmojiGlyph(ch, out int emoji, out advance))
             {
-                font.GlyphCache[ch] = result;
-                return result;
+                font.GlyphCache[ch] = emoji;
+                return emoji;
             }
             if (file != null)
             {
@@ -295,8 +295,9 @@ namespace Mynell.Lottie.Compiler
         {
             glyph = -1;
             advance = 0;
-            if (_emojiGlyphs.TryGetValue(ch, out glyph))
+            if (_emojiGlyphs.TryGetValue(ch, out int cached))
             {
+                glyph = cached;
                 advance = glyph >= 0 ? _glyphs[glyph].Advance : 0;
                 return glyph >= 0;
             }

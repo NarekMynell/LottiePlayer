@@ -143,8 +143,8 @@ namespace Mynell.Lottie.Text
             var cps = new List<int>();
             for (int i = 0; i < text.Length; i++)
             {
-                int cp = char.ConvertToUtf32(text, i);
-                if (char.IsSurrogatePair(text, i)) i++;
+                int cp = text[i];
+                if (char.IsSurrogatePair(text, i)) cp = char.ConvertToUtf32(text[i], text[++i]);
                 cps.Add(cp);
             }
             if (cps.Count == 0) return false;

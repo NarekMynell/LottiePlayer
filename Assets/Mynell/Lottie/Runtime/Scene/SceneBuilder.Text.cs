@@ -10,6 +10,7 @@ namespace Mynell.Lottie.Scene
     public unsafe partial struct SceneBuilder
     {
         [NativeDisableUnsafePtrRestriction] public GlyphData* Glyphs;
+        public int GlyphCount;
         [NativeDisableUnsafePtrRestriction] public GlyphContour* GlyphContours;
         [NativeDisableUnsafePtrRestriction] public float2* GlyphPoints;
         [NativeDisableUnsafePtrRestriction] public TextDocData* TextDocs;
@@ -24,6 +25,7 @@ namespace Mynell.Lottie.Scene
         void InitText(in LottieNativeData d)
         {
             Glyphs = (GlyphData*)d.Glyphs.GetUnsafeReadOnlyPtr();
+            GlyphCount = d.Glyphs.Length;
             GlyphContours = (GlyphContour*)d.GlyphContours.GetUnsafeReadOnlyPtr();
             GlyphPoints = (float2*)d.GlyphPoints.GetUnsafeReadOnlyPtr();
             TextDocs = (TextDocData*)d.TextDocs.GetUnsafeReadOnlyPtr();
@@ -244,7 +246,7 @@ namespace Mynell.Lottie.Scene
         // ------------------------------------------------------------------ rendering
 
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-        void RenderText(in LayerData L, float t, in Affine2 world, float4 clip, float layerOpacity)
+        void RenderText(in LayerData L, float t, in Affine2 world, float4 clip, float layerOpacity, int depth)
         {
             if (L.Text < 0) return;
             TextLayerInfo info = TextLayers[L.Text];
@@ -543,17 +545,17 @@ namespace Mynell.Lottie.Scene
                     xPos += lt.L + trackingStep;
                 }
 
-                if (lt.Glyph < 0) continue;
+                if (lt.Glyph < 0 || lt.Glyph >= GlyphCount) continue;
                 GlyphData g = Glyphs[lt.Glyph];
                 if (g.Layer >= 0)
                 {
                     // Animated glyph: its composition, on the text layer's local time, scaled to the font size.
                     float glyphOpacity = elemOpacity * layerOpacity;
                     float glyphTime = t - L.StartTime;
-                    if (glyphOpacity <= 0 || !InRange(Layers[g.Layer], glyphTime)) continue;
+                    if (glyphOpacity <= 0 || depth >= MaxDepth || !InRange(Layers[g.Layer], glyphTime)) continue;
                     Affine2 glyphToDevice = Affine2.Scale(doc.Size / 100f, doc.Size / 100f).Then(m).Then(world);
                     int gg = glyphOpacity < 1f ? BeginGroup(glyphOpacity, 0, 0, clip, 6) : -1;
-                    RenderLayer(g.Layer, glyphTime, glyphToDevice, clip, 1);
+                    RenderLayer(g.Layer, glyphTime, glyphToDevice, clip, depth + 1);
                     if (gg >= 0) EndGroup(gg);
                     continue;
                 }
