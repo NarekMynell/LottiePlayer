@@ -13,7 +13,7 @@ namespace Mynell.Lottie.Model
     public static class LottieFormat
     {
         /// <summary>Bump whenever the compiled layout changes (forces re-import).</summary>
-        public const int Version = 3;
+        public const int Version = 4;
         /// <summary>Number of samples lottie-web uses for bezier length tables.</summary>
         public const int CurveSegments = 150;
         /// <summary>lottie-web's ellipse / rounded corner constant.</summary>
@@ -106,6 +106,11 @@ namespace Mynell.Lottie.Model
         public int LayerCount;
         public float Width;
         public float Height;
+        /// <summary>Global index of the composition's (first) camera layer, -1.</summary>
+        public int Camera;
+        /// <summary>1 when the composition is 3D ('ddd'): its 3D layers get a default camera.</summary>
+        public byte Ddd;
+        public byte R0; public ushort R1;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -132,6 +137,9 @@ namespace Mynell.Lottie.Model
         public int MaskFirst, MaskCount;
         public int EffectFirst, EffectCount;
         public int Text;            // text data index, -1
+        public int CameraZoom;      // camera layers: zoom ('pe') prop, -1
+        public byte CameraTwoNode;  // camera layers: 1 = two-node (point of interest in the anchor)
+        public byte R3; public ushort R4;
     }
 
     public enum ShapeKind : byte

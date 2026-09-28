@@ -112,7 +112,7 @@ namespace Mynell.Lottie.Scene
             Out.Clear();
             _group = -1;
             float4 rootClip = Intersect(TransformRectBounds(compToDevice, new float4(0, 0, RootWidth, RootHeight)), viewport);
-            RenderComposition(0, frame, compToDevice, rootClip, 0);
+            RenderComposition(0, frame, compToDevice, rootClip, 0, new float2(RootWidth, RootHeight));
             PostProcessGroups();
         }
 
@@ -172,10 +172,12 @@ namespace Mynell.Lottie.Scene
 
         static bool InRange(in LayerData l, float compTime) => l.InPoint <= compTime && l.OutPoint > compTime;
 
-        void RenderComposition(int compIndex, float compTime, in Affine2 compToDevice, float4 clip, int depth)
+        void RenderComposition(int compIndex, float compTime, in Affine2 compToDevice, float4 clip, int depth, float2 compSize)
         {
             if (depth > MaxDepth || IsEmpty(clip)) return;
             CompData comp = Comps[compIndex];
+            float2 prevSize = _compSize;
+            _compSize = compSize;
             for (int i = comp.LayerCount - 1; i >= 0; i--)
             {
                 int li = comp.FirstLayer + i;
@@ -184,6 +186,7 @@ namespace Mynell.Lottie.Scene
                 if (!InRange(L, compTime)) continue;
                 RenderLayer(li, compTime, compToDevice, clip, depth);
             }
+            _compSize = prevSize;
         }
 
         bool IsRenderable(LayerKind k) =>
@@ -226,6 +229,24 @@ namespace Mynell.Lottie.Scene
             world = world.Then(compToDevice);
             if (hasTransformEffect) world = effectMatrix.Then(world);
 
+            // 3D layers seen through a camera: an affine view keeps the vector path; perspective renders the layer in
+            // a raster space that is warped onto the target.
+            bool projected = false;
+            float3x3 projection = float3x3.identity;
+            float4 rasterRect = EmptyRect;
+            if (CameraHomography(li, compTime, compToDevice, effectMatrix, hasTransformEffect, out float3x3 h))
+            {
+                float4 pbox = PerspectiveBox(L);
+                if (IsAffine(h, pbox.zw - pbox.xy, out Affine2 affine)) world = affine;
+                else
+                {
+                    if (!RasterSpace(h, pbox, out Affine2 layerToRaster, out rasterRect)) return;
+                    projected = true;
+                    projection = math.mul(h, math.inverse(ToMatrix3(layerToRaster)));
+                    world = hasTransformEffect ? effectMatrix.Then(layerToRaster) : layerToRaster;
+                }
+            }
+
             int strokeEffect = FindStrokeEffect(L);
             int strokeStyle = strokeEffect >= 0 ? StrokeEffectPaintStyle(Effects[strokeEffect], compTime) : 0;
             // lottie-web's Stroke effect removes the layer masks when painting on (or instead of) the layer.
@@ -237,7 +258,7 @@ namespace Mynell.Lottie.Scene
             bool rotatedClip = isPrecomp && L.Width > 0 && L.Height > 0 && !world.IsAxisAligned;
 
             bool needsGroup = hasMask || hasMatte || L.BlendMode != 0 || opacity < 1 || hasEffects ||
-                              precompNeedsIsolation || rotatedClip || strokeStyle != 0;
+                              precompNeedsIsolation || rotatedClip || strokeStyle != 0 || projected;
             bool nonLocal = hasEffects && HasNonLocalEffects(L);
             if (nonLocal)
             {
@@ -252,7 +273,7 @@ namespace Mynell.Lottie.Scene
             if (needsGroup)
             {
                 g = BeginGroup(opacity, L.BlendMode, hasMatte ? L.MatteMode : (byte)0, clip, 1);
-                if (hasEffects)
+                if (hasEffects && !projected)
                 {
                     var gd = Out.Groups[g];
                     gd.EffectFirst = Out.Effects.Length;
@@ -294,14 +315,35 @@ namespace Mynell.Lottie.Scene
                 Cmd(CmdKind.EndMatte, g);
             }
 
+            // Perspective: masks, effects and content are rendered in the layer's raster space (a projected group
+            // inside the layer group, which keeps opacity, blending and the track matte in the target space).
+            int pg = -1, contentGroup = g;
+            if (projected)
+            {
+                pg = BeginGroup(1f, 0, 0, rasterRect, 5);
+                var pd = Out.Groups[pg];
+                pd.Projected = 1;
+                pd.Projection = projection;
+                if (hasEffects)
+                {
+                    pd.EffectFirst = Out.Effects.Length;
+                    EmitEffects(L, compTime, world, world);
+                    pd.EffectCount = Out.Effects.Length - pd.EffectFirst;
+                }
+                Out.Groups[pg] = pd;
+                clip = rasterRect;
+                contentGroup = pg;
+                rotatedClip = false;
+            }
+
             if (hasMask || rotatedClip)
             {
-                Cmd(CmdKind.BeginMask, g);
+                Cmd(CmdKind.BeginMask, contentGroup);
                 int prev = _section;
                 _section = 1;
-                EmitMasks(li, compTime, world, clip, g, rotatedClip);
+                EmitMasks(li, compTime, world, clip, contentGroup, rotatedClip);
                 _section = prev;
-                Cmd(CmdKind.EndMask, g);
+                Cmd(CmdKind.EndMask, contentGroup);
             }
 
             int revealGroup = -1;
@@ -323,6 +365,7 @@ namespace Mynell.Lottie.Scene
             if (revealGroup >= 0) EndGroup(revealGroup);
             if (strokeStyle == 1 || strokeStyle == 2) EmitStrokeEffect(L, Effects[strokeEffect], compTime, world, clip, itemOpacity, false);
 
+            if (pg >= 0) EndGroup(pg);
             if (g >= 0) EndGroup(g);
         }
 
@@ -357,14 +400,16 @@ namespace Mynell.Lottie.Scene
                     if (L.Width > 0 && L.Height > 0 && !rotatedClip)
                         childClip = Intersect(clip, TransformRectBounds(world, new float4(0, 0, L.Width, L.Height)));
                     if (needsGroup && itemOpacity != 1f) { /* unreachable */ }
+                    // The camera of a precomposition sees the precomp layer's size.
+                    float2 size = L.Width > 0 && L.Height > 0 ? new float2(L.Width, L.Height) : new float2(Comps[L.RefComp].Width, Comps[L.RefComp].Height);
                     if (!needsGroup && itemOpacity < 1f)
                     {
                         // Opacity without isolation would be wrong for overlapping children: isolate.
                         int gg = BeginGroup(itemOpacity, 0, 0, clip, 2);
-                        RenderComposition(L.RefComp, childTime, world, childClip, depth + 1);
+                        RenderComposition(L.RefComp, childTime, world, childClip, depth + 1, size);
                         EndGroup(gg);
                     }
-                    else RenderComposition(L.RefComp, childTime, world, childClip, depth + 1);
+                    else RenderComposition(L.RefComp, childTime, world, childClip, depth + 1, size);
                     break;
                 }
             }
@@ -780,7 +825,7 @@ namespace Mynell.Lottie.Scene
             for (int g = gc - 1; g >= 0; g--)
             {
                 var gd = Out.Groups[g];
-                if (gd.HasMask != 0 || gd.MatteMode != 0 || gd.BlendMode != 0 || gd.EffectCount > 0) continue;
+                if (gd.HasMask != 0 || gd.MatteMode != 0 || gd.BlendMode != 0 || gd.EffectCount > 0 || gd.Projected != 0) continue;
                 int n = childCount[g];
                 if (n == 0) { gd.Collapsed = 1; Out.Groups[g] = gd; continue; }
                 if (gd.Opacity >= 1f) { gd.Collapsed = 1; Out.Groups[g] = gd; continue; }

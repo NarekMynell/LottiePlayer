@@ -92,7 +92,10 @@ namespace Mynell.Lottie.Scene
         public byte Collapsed;       // no offscreen needed: children draw straight into the parent
         public byte Reason;          // debug: why the group exists
         public byte NonLocal;        // effects read the source anywhere: the surface is not limited to the parent's
-        public byte R1;
+        /// <summary>1: the group is rendered in its own raster space and warped into the parent by <see cref="Projection"/>.</summary>
+        public byte Projected;
+        /// <summary>Projected groups: raster space -> parent device pixels (homography).</summary>
+        public float3x3 Projection;
         public int Parent;
         public int EffectFirst;      // range in FrameData.Effects applied to the group's content
         public int EffectCount;

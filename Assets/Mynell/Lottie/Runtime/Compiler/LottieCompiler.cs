@@ -120,9 +120,10 @@ namespace Mynell.Lottie.Compiler
             CompileFontsAndChars(root);
 
             // Pass 2: compile compositions (layers must be contiguous per composition).
-            CompileComposition(0, root["layers"], data.Width, data.Height);
+            CompileComposition(0, root["layers"], data.Width, data.Height, root["ddd"].AsInt(0) != 0);
             for (int i = 0; i < precomps.Count; i++)
-                CompileComposition(i + 1, precomps[i]["layers"], precomps[i]["w"].AsFloat(0), precomps[i]["h"].AsFloat(0));
+                CompileComposition(i + 1, precomps[i]["layers"], precomps[i]["w"].AsFloat(0), precomps[i]["h"].AsFloat(0),
+                    precomps[i]["ddd"].AsInt(0) != 0);
 
             // Markers.
             var markers = new List<LottieMarker>();
@@ -266,11 +267,11 @@ namespace Mynell.Lottie.Compiler
 
         // ------------------------------------------------------------------------------ layers
 
-        void CompileComposition(int compIndex, JsonValue layers, float w, float h)
+        void CompileComposition(int compIndex, JsonValue layers, float w, float h, bool ddd)
         {
             int first = _layers.Count;
             int count = layers.Count;
-            var comp = new CompData { FirstLayer = first, LayerCount = count, Width = w, Height = h };
+            var comp = new CompData { FirstLayer = first, LayerCount = count, Width = w, Height = h, Camera = -1, Ddd = (byte)(ddd ? 1 : 0) };
             _comps[compIndex] = comp;
             // Reserve slots so that shape/mask compilation of one layer can't interleave with another.
             for (int i = 0; i < count; i++)
@@ -286,6 +287,12 @@ namespace Mynell.Lottie.Compiler
                 _layers[first + li] = CompileLayer(l, compIndex);
                 _layerNames[first + li] = l["nm"].AsString("");
                 _layerShapeRoots[first + li] = _currentShapeRoots;
+                // Like Skottie: the first camera layer of a composition is its camera.
+                if (_layers[first + li].Kind == LayerKind.Camera && comp.Camera < 0)
+                {
+                    comp.Camera = first + li;
+                    _comps[compIndex] = comp;
+                }
                 li++;
             }
 
@@ -333,6 +340,7 @@ namespace Mynell.Lottie.Compiler
                 Image = -1,
                 ShapeProgram = -1,
                 Text = -1,
+                CameraZoom = -1,
             };
             int ty = l["ty"].AsInt(3);
             L.Kind = ty switch
@@ -404,7 +412,9 @@ namespace Mynell.Lottie.Compiler
                     L.Text = CompileTextLayer(l);
                     break;
                 case LayerKind.Camera:
-                    Unsupported("3D camera layers");
+                    L.CameraZoom = l.Has("pe") ? CompileProp(l["pe"], PropHint.Scalar) : -1;
+                    // One-node cameras have no point of interest (anchor).
+                    L.CameraTwoNode = (byte)(ks.IsObject && ks["a"].IsObject ? 1 : 0);
                     break;
             }
 

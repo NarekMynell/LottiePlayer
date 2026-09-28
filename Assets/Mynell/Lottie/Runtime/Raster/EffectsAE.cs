@@ -373,6 +373,9 @@ namespace Mynell.Lottie.Raster
             return math.lerp(math.lerp(c00, c10, w.x), math.lerp(c01, c11, w.x), w.y);
         }
 
+        /// <summary>Bilinear sample of a surface (packed premultiplied) at a device point; transparent outside.</summary>
+        public static uint SampleBilinear(in Target src, float2 device) => PackPremul(Sample(src, device));
+
         static float4 Fetch(in Target s, int x, int y)
         {
             if ((uint)x >= (uint)s.W || (uint)y >= (uint)s.H) return float4.zero;

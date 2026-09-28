@@ -82,10 +82,13 @@ namespace Mynell.Lottie
             else fr.Render();
         }
 
+        /// <summary>Effects reading anywhere in a layer, or layers warped in perspective: the frame renders as one band.</summary>
         bool HasNonLocalEffects()
         {
             for (int i = 0; i < Frame.Effects.Length; i++)
                 if (Effects.IsNonLocal(Frame.Effects[i].Kind)) return true;
+            for (int i = 0; i < Frame.Groups.Length; i++)
+                if (Frame.Groups[i].Projected != 0) return true;
             return false;
         }
 

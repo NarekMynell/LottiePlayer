@@ -373,7 +373,9 @@ namespace Mynell.Lottie.Raster
                         if (gd.MatteMode != 0 && (gd.MatteMode & 1) == 1) b = SceneBuilder.Intersect(b, G.GroupMatteBounds[g]);
                         if (SceneBuilder.IsEmpty(b)) b = SceneBuilder.EmptyRect;
                         G.GroupRect[g] = RoundOut(b);
-                        if (stack.Length > 0 && !SceneBuilder.IsEmpty(b)) AddBounds(stack[stack.Length - 1], b);
+                        // A projected group covers its warped raster rectangle in the parent.
+                        if (stack.Length > 0 && !SceneBuilder.IsEmpty(b))
+                            AddBounds(stack[stack.Length - 1], gd.Projected != 0 ? ProjectRect(gd.Projection, b) : b);
                         break;
                     }
                     case CmdKind.BeginMask:
@@ -410,6 +412,21 @@ namespace Mynell.Lottie.Raster
                 }
             }
             stack.Dispose();
+        }
+
+        /// <summary>Bounds of a rectangle mapped by a homography (unbounded when it crosses the camera plane).</summary>
+        static float4 ProjectRect(in float3x3 h, float4 r)
+        {
+            float4 b = SceneBuilder.EmptyRect;
+            for (int i = 0; i < 4; i++)
+            {
+                float2 q = new float2((i & 1) == 0 ? r.x : r.z, (i & 2) == 0 ? r.y : r.w);
+                float3 p = math.mul(h, new float3(q, 1));
+                if (!(p.z > 1e-6f)) return SceneBuilder.HugeRect;
+                float2 d = p.xy / p.z;
+                b = SceneBuilder.Union(b, new float4(d, d));
+            }
+            return b;
         }
 
         void AddBounds(int2 top, float4 b)
@@ -496,7 +513,9 @@ namespace Mynell.Lottie.Raster
                             int2 halo = (int2)math.ceil(G.GroupReach[g]);
                             parentRect = IntersectI(new int4(parentRect.xy - halo, parentRect.zw + halo), new int4(0, 0, RootW, RootH));
                         }
-                        int4 rect = parentTarget >= 0 ? (gd.NonLocal != 0 ? G.GroupRect[g] : IntersectI(G.GroupRect[g], parentRect)) : new int4();
+                        int4 rect = parentTarget >= 0
+                            ? (gd.NonLocal != 0 || gd.Projected != 0 ? G.GroupRect[g] : IntersectI(G.GroupRect[g], parentRect))
+                            : new int4();
                         if (parentTarget < 0 || EmptyI(rect))
                         {
                             c = SkipGroup(c, g);
@@ -726,6 +745,12 @@ namespace Mynell.Lottie.Raster
         {
             GroupData gd = F.Groups[e.Group];
             bool maskBaked = gd.EffectCount > 0 && ApplyEffects(gd, e);
+            if (gd.Projected != 0)
+            {
+                if (e.Mask >= 0 && !maskBaked) BakeMask(e);
+                WarpGroup(gd, R.Surfaces[e.Layer], R.Surfaces[dstIndex]);
+                return;
+            }
             Surface src = R.Surfaces[e.Layer];
             Surface dst = R.Surfaces[dstIndex];
             int4 rect = IntersectI(src.Rect, dst.Rect);
@@ -779,6 +804,38 @@ namespace Mynell.Lottie.Raster
                     uint s = k == 255 ? sv : Px8.Mul(sv, k);
                     if (mode == 0) drow[x] = Px8.Over(s, drow[x]);
                     else drow[x] = Blend.Pack(Blend.Composite(mode, Blend.Unpack(s), Blend.Unpack(drow[x])));
+                }
+            }
+        }
+
+        /// <summary>Draws a projected group's raster surface into the parent through its homography (bilinear).</summary>
+        void WarpGroup(in GroupData gd, in Surface src, in Surface dst)
+        {
+            float4 b = SceneBuilder.Intersect(ProjectRect(gd.Projection, new float4(src.X0, src.Y0, src.X0 + src.W, src.Y0 + src.H)),
+                new float4(dst.X0, dst.Y0, dst.X0 + dst.W, dst.Y0 + dst.H));
+            int4 rect = RoundOut(b);
+            if (EmptyI(rect)) return;
+            float3x3 inv = math.inverse(gd.Projection);
+            float3 w = new float3(gd.Projection.c0.z, gd.Projection.c1.z, gd.Projection.c2.z);
+            uint op8 = (uint)(math.saturate(gd.Opacity) * 255f + 0.5f);
+            uint* sp = Px(src);
+            uint* dp = Px(dst);
+            var s = new Effects.Target { Px = sp, X0 = src.X0, Y0 = src.Y0, W = src.W, H = src.H };
+            for (int y = rect.y; y < rect.w; y++)
+            {
+                uint* drow = dp + (y - dst.Y0) * dst.W - dst.X0;
+                for (int x = rect.x; x < rect.z; x++)
+                {
+                    float3 q = math.mul(inv, new float3(x + 0.5f, y + 0.5f, 1));
+                    if (math.abs(q.z) < 1e-12f) continue;
+                    float2 r = q.xy / q.z;
+                    // Only points of the plane in front of the camera.
+                    if (!(math.dot(w, new float3(r, 1)) > 0)) continue;
+                    if (r.x < src.X0 - 1 || r.y < src.Y0 - 1 || r.x > src.X0 + src.W + 1 || r.y > src.Y0 + src.H + 1) continue;
+                    uint c = Effects.SampleBilinear(s, r);
+                    if (c == 0) continue;
+                    if (op8 < 255) c = Px8.Mul(c, op8);
+                    drow[x] = Px8.Over(c, drow[x]);
                 }
             }
         }
