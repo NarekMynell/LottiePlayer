@@ -667,9 +667,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 1948599538}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 587836a0fd90b4d1e841d7b4e56cffd6, type: 3}
+  m_Script: {fileID: 11500000, guid: 65a6f601bcf7e496cb195649f17999f0, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Mynell.LottiePlayer::Mynell.LottiePlayer.Components.MynellLottieUGUI
+  m_EditorClassIdentifier: Mynell.Lottie::Mynell.Lottie.LottieImage
   m_Material: {fileID: 0}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_RaycastTarget: 1
@@ -678,21 +678,20 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  _asset: {fileID: 11400000, guid: bdf56f25585a8471f9c136c6f574537c, type: 2}
-  _autoPlay: 1
-  _loop: 1
-  _speed: 1
-  _tessellationQuality: 1
-  _maxVertices: 65536
-  _maxIndices: 196608
-  _maxDrawCommands: 4096
-  _maxPolyPoolSize: 32768
-  _maxVerticesPerShape: 1024
-  _parallelBatchSize: 4
-  _preserveAspect: 1
-  _verbose: 0
-  _debugForceOpaqueWhiteVertices: 0
-  _debugDrawTestQuad: 0
+  m_Asset: {fileID: -6750239444755058063, guid: 08b067edf78c44a2e94772157a554223, type: 3}
+  m_PlayOnEnable: 1
+  m_LoopMode: 1
+  m_LoopCount: 0
+  m_Speed: 1
+  m_UnscaledTime: 0
+  m_Subframes: 1
+  m_PreserveAspect: 1
+  m_ResolutionScale: 1
+  m_MaxTextureSize: 2048
+  m_EditorPreviewTime: 0
+  m_OnComplete:
+    m_PersistentCalls:
+      m_Calls: []
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
