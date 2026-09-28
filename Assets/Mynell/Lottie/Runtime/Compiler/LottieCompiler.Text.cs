@@ -100,7 +100,7 @@ namespace Mynell.Lottie.Compiler
         int AddGlyph(float advance)
         {
             _glyphContourStart = _glyphContours.Count;
-            _glyphs.Add(new GlyphData { ContourFirst = _glyphContours.Count, Advance = advance, Layer = -1 });
+            _glyphs.Add(new GlyphData { ContourFirst = _glyphContours.Count, Advance = advance, Layer = -1, Image = -1 });
             return _glyphs.Count - 1;
         }
 
@@ -252,9 +252,17 @@ namespace Mynell.Lottie.Compiler
             }
             var file = LoadFontFile(font);
             int result = -1;
+            int firstCp = ch.Length > 0 ? char.ConvertToUtf32(ch, 0) : 0;
+            // Emoji presentation (like the browser): pictographs, sequences with VS16, or characters the font lacks.
+            bool wantsEmoji = ch.IndexOf('\uFE0F') >= 0 || firstCp >= 0x1F000 || (file != null && file.GlyphIndex(firstCp) == 0 && firstCp > 0x7F);
+            if (wantsEmoji && EmojiGlyph(ch, out result, out advance))
+            {
+                font.GlyphCache[ch] = result;
+                return result;
+            }
             if (file != null)
             {
-                int cp = ch.Length > 0 ? char.ConvertToUtf32(ch, 0) : 0;
+                int cp = firstCp;
                 int gi = file.GlyphIndex(cp);
                 bool missing = gi == 0;
                 float adv = file.Advance(gi) * 100f / file.UnitsPerEm;
@@ -275,6 +283,57 @@ namespace Mynell.Lottie.Compiler
             }
             font.GlyphCache[ch] = result;
             return result;
+        }
+
+        internal string EmojiFontPath;
+        internal Text.EmojiFont _emoji;
+        bool _emojiLoaded;
+        readonly Dictionary<string, int> _emojiGlyphs = new Dictionary<string, int>();
+
+        /// <summary>A colour emoji glyph (bitmap stored as an image asset of the animation).</summary>
+        bool EmojiGlyph(string ch, out int glyph, out float advance)
+        {
+            glyph = -1;
+            advance = 0;
+            if (_emojiGlyphs.TryGetValue(ch, out glyph))
+            {
+                advance = glyph >= 0 ? _glyphs[glyph].Advance : 0;
+                return glyph >= 0;
+            }
+            if (!_emojiLoaded)
+            {
+                _emojiLoaded = true;
+                string path = EmojiFontPath ?? Text.EmojiFont.SystemFontPath();
+                if (!string.IsNullOrEmpty(path)) _emoji = Text.EmojiFont.Open(path);
+            }
+            if (_emoji == null || !_emoji.TryGetGlyph(ch, out var bitmap))
+            {
+                _emojiGlyphs[ch] = -1;
+                return false;
+            }
+            int image = _images.Count;
+            ReadPngSize(bitmap.Png, out int w, out int h);
+            _images.Add(new ImageAsset { Width = w, Height = h, Texture = -1 });
+            _imageIds.Add("emoji:" + ch);
+            _imagePaths.Add("");
+            _imageBytes.Add(bitmap.Png);
+            glyph = AddGlyph(bitmap.Advance);
+            FinishGlyph(glyph);
+            var gd = _glyphs[glyph];
+            gd.Image = image;
+            gd.ImageRect = new float4(bitmap.X, bitmap.Y, bitmap.Width, bitmap.Height);
+            _glyphs[glyph] = gd;
+            _emojiGlyphs[ch] = glyph;
+            advance = bitmap.Advance;
+            return true;
+        }
+
+        static void ReadPngSize(byte[] png, out int w, out int h)
+        {
+            w = h = 1;
+            if (png == null || png.Length < 24) return;
+            w = (png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19];
+            h = (png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23];
         }
 
         TrueTypeFont LoadFontFile(FontInfo font)

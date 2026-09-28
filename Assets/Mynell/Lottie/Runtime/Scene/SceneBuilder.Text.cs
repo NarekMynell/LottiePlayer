@@ -557,6 +557,13 @@ namespace Mynell.Lottie.Scene
                     if (gg >= 0) EndGroup(gg);
                     continue;
                 }
+                if (g.Image >= 0)
+                {
+                    // Colour emoji: the glyph bitmap, not tinted by the fill colour (like browsers).
+                    float emojiOpacity = elemOpacity * layerOpacity;
+                    if (emojiOpacity > 0) EmitGlyphImage(g, glyphScale, m.Then(world), emojiOpacity, clip);
+                    continue;
+                }
                 if (g.ContourCount == 0) continue;
                 float opacity = elemOpacity * layerOpacity;
                 if (opacity <= 0) continue;
@@ -721,6 +728,37 @@ namespace Mynell.Lottie.Scene
                 for (int v = 0; v < gc.Count * 3; v++) Out.Points.Add(m.Apply(src[v] * scale));
                 Out.Contours.Add(new Contour { First = first, Count = gc.Count, Closed = 1 });
             }
+        }
+
+        void EmitGlyphImage(in GlyphData g, float scale, in Affine2 letterToDevice, float opacity, float4 clip)
+        {
+            ImageAsset img = Images[g.Image];
+            if (img.Width <= 0 || img.Height <= 0) return;
+            float4 r = g.ImageRect;
+            Affine2 boxToDevice = new Affine2(r.z / img.Width, 0, 0, r.w / img.Height, r.x, r.y)
+                .Then(Affine2.Scale(scale, scale)).Then(letterToDevice);
+            int cFirst = Out.Contours.Length;
+            AppendRectContour(boxToDevice, 0, 0, img.Width, img.Height, false);
+            int paint = Out.Paints.Length;
+            Out.Paints.Add(new PaintData
+            {
+                Kind = PaintKind.Image,
+                Color = new float4(1, 1, 1, 1),
+                Opacity = opacity,
+                DeviceToPaint = boxToDevice.Inverse(),
+                Image = g.Image,
+                ImageSize = new float2(img.Width, img.Height),
+            });
+            AddDraw(new DrawItem
+            {
+                Kind = ItemKind.Fill,
+                ContourFirst = cFirst,
+                ContourCount = 1,
+                ToDevice = Affine2.Identity,
+                Paint = paint,
+                Clip = clip,
+                Group = _group,
+            });
         }
 
         void EmitGlyphFill(in GlyphData g, float scale, in Affine2 letterToDevice, float4 color, float opacity, float4 clip)
