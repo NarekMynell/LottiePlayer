@@ -9,13 +9,15 @@ by Burst-compiled jobs into textures, with results matched pixel by pixel agains
 - **Fast.** Burst jobs rasterize with exact-area anti-aliasing and scale across CPU cores. Frames identical to the
   previous one are detected by a content hash, so they are neither rasterized nor uploaded again. At 2048 × 2048, the
   lottie-web demo animations render in 0.5–1.5 ms per frame on a 12-thread desktop CPU.
-- **Complete.** Supports expressions (baked at import), text (embedded glyphs or font files, animators, text on a
-  path), images, precomps, time remapping, masks, track mattes, blend modes, effects, merge paths, offset paths,
-  repeaters, trim paths and markers — plus runtime color / opacity / transform overrides by key path.
+- **Complete.** Supports expressions (baked at import), text (embedded glyphs or font files, animators, expression
+  selectors, text on a path, colour emoji, animated glyphs), images, precomps, time remapping, masks, track mattes,
+  blend modes, merge paths, offset paths, repeaters, trim paths, markers, 3D layers seen through cameras, layer styles
+  and 30+ After Effects effects — plus runtime color / opacity / transform overrides by key path.
 - **Easy to use.** Drop a `.json` or `.lottie` file into the project, add a **Lottie Image** (uGUI),
   **Lottie Element** (UI Toolkit) or **Lottie Renderer** (world space), and press Play.
 
-Tested with Unity 6000.3. Requires Burst, Collections, Mathematics and uGUI.
+Tested with Unity 6000.3 in the Editor and in macOS (Mono and IL2CPP), Android (IL2CPP, ARM64) and WebGL players,
+which render the reference animations identically. Requires Burst, Collections, Mathematics and uGUI.
 
 ---
 
@@ -194,24 +196,37 @@ convert the color from sRGB after sampling.
   rasterized nor uploaded to the GPU.
 - Texture resolution is the main cost. Keep *Resolution Scale* at 1 (on-screen size) and lower *Max Texture Size*
   for large animations when crisp detail is not needed.
-- Gaussian blur, drop shadow and large masks/mattes cost more than plain shapes.
+- Gaussian blur, shadows, glows, layer styles and large masks/mattes cost more than plain shapes. Effects that move
+  pixels across the layer (Motion Tile, Corner Pin, Bulge, CC Sphere, Displacement Map) and 3D layers in perspective
+  render their frame as a single band.
+- WebGL has no worker threads and no Burst: animations still render (identically), just slower.
 
 ## Fidelity
 
 The reference is lottie-web (SVG renderer), which is what most designers preview with. Where lottie-web is known to
-deviate from After Effects, this player follows After Effects:
+deviate from After Effects, or ignores a feature, this player follows After Effects (checked against Skia's Skottie,
+which implements After Effects' semantics for those features):
 
 - **Merge Paths** (add, subtract, intersect, exclude) are computed; lottie-web ignores them.
+- **3D layers** are seen through the composition's camera layer (one- or two-node, parented, animated zoom) or After
+  Effects' default camera, with perspective; lottie-web's SVG renderer flattens them. Layers seen without perspective
+  render exactly like lottie-web.
+- **Layer styles**: drop shadow, inner shadow, outer glow, inner glow, color overlay and stroke.
+- **Effects** beyond lottie-web's set: Gradient Ramp, Hue/Saturation, Brightness & Contrast, Invert, Threshold,
+  Black & White, CC Toner, Shift Channels, Levels, Linear Wipe, Radial Wipe, Venetian Blinds, Fractal Noise,
+  Motion Tile, Corner Pin, Bulge, Directional Blur, Sharpen, Displacement Map, CC Sphere and Transform. lottie-web's own
+  effects (Fill, Tint, Tritone, Pro Levels, Gaussian Blur, Drop Shadow, Stroke, Set Matte, Transform) follow lottie-web.
+- **Text**: several selectors per animator add up, animator blur, and colour emoji (see *Text*).
 - `loopIn`/`loopOut` cycles, `wiggle` and `random` in expressions are exact and deterministic.
 - Luma mattes, chained track mattes, mask modes lighten / darken / difference and mask expansion behave as in
   After Effects.
 - Offset Path and Pucker & Bloat follow their amount back to 0 (lottie-web keeps showing the last modified shape).
 - Drop shadows and blurs are not cropped at the layer bounds (lottie-web's SVG filter region cuts off far shadows).
+- Downscaled images are mipmapped (sampled like Chrome) instead of aliasing.
 
-**Not rendered** (reported in the asset Inspector and in `LottieAsset.Unsupported`): layer styles
-(stroke, shadows, glows, overlays — lottie-web ignores them too), 3D cameras and perspective (3D layers are drawn
-with their 2D projection), text expression selectors, the *Stroke* and *Set Matte* effects, displacement map and other
-distortion effects, and the Twist modifier.
+**Not rendered** (reported in the asset Inspector and in `LottieAsset.Unsupported`): the Bevel & Emboss, Satin and
+Gradient Overlay layer styles, SkSL shader effects (Skia specific), and the Twist modifier. 3D layers are drawn in
+layer order (After Effects also depth-sorts intersecting 3D layers).
 
 ### Expressions
 
@@ -227,7 +242,16 @@ Text layers use the glyph outlines exported with the animation. When the animati
 importer looks for it in the project (any `.ttf`, `.otf`, `.ttc` under `Assets`), then in the operating system's font
 folders, and bakes the glyphs into the asset. dotLottie files can carry their own fonts. If a font cannot be found,
 the text is drawn with a common sans-serif font and the asset Inspector says which font to add. Text animators
-(including per-character 3D rotation, projected), text boxes, paragraph alignment and text on a path are supported.
+(including per-character 3D rotation, projected), range and expression selectors, text boxes, paragraph alignment,
+text on a path and glyphs exported as animated compositions are supported.
+
+**Emoji** in text without embedded glyphs are drawn in colour like in a browser: the importer takes them from the
+system's colour emoji font (Apple Color Emoji on macOS, Noto Color Emoji on Android / Linux), including skin tones,
+ZWJ sequences, flags and keycaps, and stores the bitmaps in the asset, so they show on every platform.
+`LottieCompileOptions.EmojiFontPath` selects another font (a bitmap emoji font such as Noto Color Emoji).
+
+Text compiled at runtime (`LottieAsset.CreateFromJson`) can only use the fonts of the device; on WebGL there are none,
+so import such animations in the Editor or pass a font through `LottieCompileOptions.FontResolver`.
 
 ### Images
 
