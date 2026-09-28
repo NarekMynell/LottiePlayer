@@ -237,7 +237,12 @@ namespace Mynell.Lottie.Scene
             if (CameraHomography(li, compTime, compToDevice, effectMatrix, hasTransformEffect, out float3x3 h))
             {
                 float4 pbox = PerspectiveBox(L);
-                if (IsAffine(h, pbox.zw - pbox.xy, out Affine2 affine)) world = affine;
+                if (IsAffine(h, pbox.zw - pbox.xy, out Affine2 affine))
+                {
+                    // Seen without perspective: keep lottie-web's matrix when it is the same view (flat 3D layers at
+                    // the focal plane of the default camera), so the result stays identical to the 2D path.
+                    if (!Same(affine, world)) world = affine;
+                }
                 else
                 {
                     if (!RasterSpace(h, pbox, out Affine2 layerToRaster, out rasterRect)) return;

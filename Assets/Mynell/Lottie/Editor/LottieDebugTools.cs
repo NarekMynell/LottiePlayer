@@ -127,6 +127,46 @@ namespace Mynell.Lottie.Editor
         /// Batch-mode benchmark: -bench file1;file2 -size N [-out report.txt]. Measures ms per frame of
         /// <see cref="LottieRenderState.RenderImmediate"/> single-threaded vs banded, over the whole animation.
         /// </summary>
+        /// <summary>
+        /// Batch-mode diagnostics: -layers file.json -frame f. Prints each root layer's 2D world matrix and, for 3D layers
+        /// seen through a camera, the plane homography.
+        /// </summary>
+        public static void RunLayerDumpCli()
+        {
+            var args = System.Environment.GetCommandLineArgs();
+            string Arg(string name)
+            {
+                for (int i = 0; i < args.Length - 1; i++) if (args[i] == name) return args[i + 1];
+                return null;
+            }
+            var sb = new StringBuilder();
+            try
+            {
+                float frame = float.Parse(Arg("-frame") ?? "0", System.Globalization.CultureInfo.InvariantCulture);
+                using var anim = LottieAnimation.FromJson(File.ReadAllBytes(Arg("-layers")));
+                var frameData = Mynell.Lottie.Scene.FrameData.Create();
+                var scratch = Mynell.Lottie.Scene.SceneScratch.Create();
+                var b = Mynell.Lottie.Scene.SceneBuilder.Create(anim.Native, frameData, scratch);
+                b._compSize = new Unity.Mathematics.float2(anim.Width, anim.Height);
+                var data = anim.Data;
+                var comp = data.Comps[0];
+                for (int i = 0; i < comp.LayerCount; i++)
+                {
+                    int li = comp.FirstLayer + i;
+                    var c2d = LottieRenderState.FitTransform(anim.Width, anim.Height, 360, 360, true);
+                    var w = b.LayerWorld(li, frame).Then(c2d);
+                    sb.AppendLine($"{li} {data.LayerNames[li]} kind {data.Layers[li].Kind} flags {data.Layers[li].Flags}: world a={w.a} b={w.b} c={w.c} d={w.d} tx={w.tx} ty={w.ty}");
+                    if (b.CameraHomography(li, frame, c2d, Eval.Affine2.Identity, false, out var h))
+                        sb.AppendLine($"    H = [{h.c0.x} {h.c1.x} {h.c2.x}; {h.c0.y} {h.c1.y} {h.c2.y}; {h.c0.z} {h.c1.z} {h.c2.z}] -> tx {h.c2.x / h.c2.z} ty {h.c2.y / h.c2.z} a {h.c0.x / h.c2.z} d {h.c1.y / h.c2.z}");
+                }
+                frameData.Dispose();
+                scratch.Dispose();
+            }
+            catch (System.Exception e) { sb.AppendLine(e.ToString()); }
+            UnityEngine.Debug.Log("LAYER DUMP\n" + sb);
+            UnityEditor.EditorApplication.Exit(0);
+        }
+
         public static void RunBenchCli()
         {
             var args = System.Environment.GetCommandLineArgs();

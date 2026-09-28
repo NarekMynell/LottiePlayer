@@ -10,7 +10,7 @@ namespace Mynell.Lottie.Scene
     public unsafe partial struct SceneBuilder
     {
         /// <summary>Size of the composition being rendered (the camera viewport).</summary>
-        float2 _compSize;
+        internal float2 _compSize;
 
         const float DefaultCameraZoom = 879.13f;
         const float MaxRasterSize = 4096f;
@@ -145,7 +145,7 @@ namespace Mynell.Lottie.Scene
         /// The layer-plane (z = 0) -> device homography of a 3D layer seen through its composition's camera, false for
         /// layers rendered without one (lottie-web's flattened 3D).
         /// </summary>
-        bool CameraHomography(int li, float t, in Affine2 compToDevice, in Affine2 effectMatrix, bool hasTransformEffect, out float3x3 h)
+        internal bool CameraHomography(int li, float t, in Affine2 compToDevice, in Affine2 effectMatrix, bool hasTransformEffect, out float3x3 h)
         {
             h = float3x3.identity;
             LayerData L = Layers[li];
@@ -215,6 +215,13 @@ namespace Mynell.Lottie.Scene
                 return new float4(-margin, box + margin);
             }
             return new float4(0, 0, box);
+        }
+
+        static bool Same(in Affine2 x, in Affine2 y)
+        {
+            const float Eps = 1e-3f;
+            return math.abs(x.a - y.a) < Eps && math.abs(x.b - y.b) < Eps && math.abs(x.c - y.c) < Eps && math.abs(x.d - y.d) < Eps &&
+                   math.abs(x.tx - y.tx) < 0.01f && math.abs(x.ty - y.ty) < 0.01f;
         }
 
         static float3x3 ToMatrix3(in Affine2 m) => new float3x3(m.a, m.c, m.tx, m.b, m.d, m.ty, 0, 0, 1);
