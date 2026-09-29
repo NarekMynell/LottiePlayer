@@ -20,5 +20,6 @@ First release.
   Black & White, CC Toner, Shift Channels, Levels, Linear / Radial Wipe, Venetian Blinds, Fractal Noise, Motion Tile,
   Corner Pin, Bulge, Directional Blur, Sharpen, Displacement Map, CC Sphere; lottie-web's Stroke and Set Matte.
 - Text: expression selectors, several selectors per animator, animator blur, animated glyph compositions and colour
-  emoji (Apple Color Emoji / Noto Color Emoji).
+  emoji from bitmap ('sbix', 'CBDT') and vector ('COLR' versions 0 and 1) colour fonts: Apple Color Emoji, Segoe UI
+  Emoji, Noto Color Emoji.
 - Mipmapped image sampling.

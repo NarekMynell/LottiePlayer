@@ -430,6 +430,103 @@ namespace Mynell.Lottie.Tests
             Assert.Greater(colored, 50, "the yellow face is drawn");
         }
 
+        /// <summary>
+        /// A 1 KB COLR font: U+1F7E5 = red box under a half transparent blue diamond (COLR v0 layers), U+1F7E6 = box with a
+        /// red to green linear gradient, U+1F7E9 = green diamond composited src-in over a red box, scaled by 0.5 (COLR v1).
+        /// Units per em 1000; box (100, 0) - (900, 800), diamond inscribed in it.
+        /// </summary>
+        const string ColrTestFont =
+            "AAEAAAAMAIAAAwBAQ09MUtSlQ4gAAANgAAAAj0NQQUwBgAATAAAD8AAAABpPUy8yRN9HgwAAAUgAAABgY21hcAAi4GQAAAG4AAAAXGdseWZqWVaCAAACJAAA" +
+            "AIhoZWFkMMBuLgAAAMwAAAA2aGhlYQcKA4YAAAEEAAAAJGhtdHgFFADIAAABqAAAAA5sb2NhAHsAVAAAAhQAAAAObWF4cAAIAAYAAAEoAAAAIG5hbWWu02vl" +
+            "AAACrAAAAGNwb3N02QBqKQAAAxAAAABPAAEAAAABAACJiu2EXw889QADA+gAAAAA5uEVFwAAAADm4RUXAGQAAAOEAyAAAAADAAIAAAAAAAAAAQAAAyD/OAAA" +
+            "A+gAZABkA4QAAQAAAAAAAAAAAAAAAAAAAAEAAQAAAAYABAABAAAAAAACAAAAAAAAAAAAAAAAAAAAAAADA+gBkAAFAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAA/Pz8/AAD/////AyD/OAAAAyAAyAAAAAAAAAAAAAAAAAAAACAAAAPoAAAAZABkAGQAZABkAAAAAAADAAAAAwAA" +
+            "ABwAAwABAAAAHAADAAoAAAA0AAQAGAAAAAIAAgAAAAD//wAA//8AAQAAAAwAAAAAACgAAAAAAAAAAgAB9+UAAffmAAAAAwAB9+kAAffpAAAABQAAAAAADQAd" +
+            "ACoANwBEAAAAAQBkAAADhAMgAAMAADMRIRFkAyADIPzgAAABAGQAAAOEAyAAAwAAIQkCAfT+cAGQAZABkAGQ/nAAAAEAZAAAA4QDIAADAAAzESERZAMgAyD8" +
+            "4AAAAQBkAAADhAMgAAMAADMRIRFkAyADIPzgAAABAGQAAAOEAyAAAwAAMxEhEWQDIAMg/OAAAAAABAA2AAEAAAAAAAEACAAAAAEAAAAAAAIABwAIAAMAAQQJ" +
+            "AAEAEAAPAAMAAQQJAAIADgAfQ29sclRlc3RSZWd1bGFyAEMAbwBsAHIAVABlAHMAdABSAGUAZwB1AGwAYQByAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAYAAAECAQMBBAEFAQYDYm94B2RpYW1vbmQGZW1vamlBBmVtb2ppQgZlbW9qaUMAAAEAAQAAACIAAAAoAAIAAAAwAAAAAAAAAAAAAAAAAAAAAAAD" +
+            "AAAAAgABAAAAAgABAAAAAgAEAAAAEAAFAAAANQoAAAYAAQQAABAAZAAAA4QAAABkAGQAAAIAAAAAQABAAAACQAASAAAMIAAgAAH0AZAgAAAIBQAAEwoAAAYA" +
+            "AgIAAkAACgAABgABAgAAQAAAAAAAAwABAAMAAAAOAAAAAP///wAAgAD/AP8AAA==";
+
+        static Color32 GlyphPixel(Text.EmojiFont.Glyph glyph, float fontX, float fontY)
+        {
+            var tex = new Texture2D(2, 2);
+            try
+            {
+                Assert.IsTrue(tex.LoadImage(glyph.Png), "the glyph bitmap is a PNG");
+                // Font units (1000 per em, y up) -> glyph space (font size 100, y down) -> bitmap pixels.
+                int px = (int)((fontX / 10f - glyph.X) / glyph.Width * tex.width);
+                int py = (int)((-fontY / 10f - glyph.Y) / glyph.Height * tex.height);
+                return tex.GetPixel(px, tex.height - 1 - py);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(tex);
+            }
+        }
+
+        [Test]
+        public void ColrGlyphs_RenderLayersGradientsAndComposites()
+        {
+            using var font = Text.EmojiFont.Open(new System.IO.MemoryStream(Convert.FromBase64String(ColrTestFont)));
+            Assert.IsNotNull(font, "the COLR font opens");
+
+            Assert.IsTrue(font.TryGetGlyph("\ud83d\udfe5", out var layered));
+            Assert.AreEqual(10f, layered.X, 0.01f);
+            Assert.AreEqual(-80f, layered.Y, 0.01f);
+            Assert.AreEqual(100f, layered.Advance, 0.01f);
+            AssertColor(new Color32(128, 0, 128, 255), GlyphPixel(layered, 500, 400), 2, "blue at 50% over red");
+            AssertColor(new Color32(255, 0, 0, 255), GlyphPixel(layered, 150, 50), 2, "red outside the diamond");
+
+            Assert.IsTrue(font.TryGetGlyph("\ud83d\udfe6", out var gradient));
+            AssertColor(new Color32(239, 16, 0, 255), GlyphPixel(gradient, 150, 400), 3, "gradient near the start");
+            AssertColor(new Color32(128, 128, 0, 255), GlyphPixel(gradient, 500, 400), 3, "gradient in the middle");
+            AssertColor(new Color32(16, 239, 0, 255), GlyphPixel(gradient, 850, 400), 3, "gradient near the end");
+
+            Assert.IsTrue(font.TryGetGlyph("\ud83d\udfe9", out var composite));
+            Assert.AreEqual(40f, composite.Width, 0.01f, "scaled by 0.5");
+            AssertColor(new Color32(0, 255, 0, 255), GlyphPixel(composite, 500, 400), 2, "source kept inside the backdrop");
+            Assert.Less(GlyphPixel(composite, 320, 220).a, 8, "the backdrop is not drawn (src-in)");
+        }
+
+        [Test]
+        public void Emoji_FromAColrFontFile()
+        {
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "mynell-lottie-colr-test.ttf");
+            System.IO.File.WriteAllBytes(path, Convert.FromBase64String(ColrTestFont));
+            try
+            {
+                string text = "{\"ty\":5,\"ind\":1,\"ip\":0,\"op\":60,\"st\":0," + Transform + ",\"t\":{\"d\":{\"k\":[{\"s\":{\"s\":40," +
+                              "\"f\":\"NoSuchFont\",\"t\":\"\\ud83d\\udfe6\",\"j\":0,\"tr\":0,\"lh\":48,\"ls\":0,\"fc\":[0,0,0]},\"t\":0}]}," +
+                              "\"p\":{},\"m\":{\"g\":1,\"a\":{\"a\":0,\"k\":[0,0]}},\"a\":[]}}";
+                string json = Comp(text, 60, ",\"fonts\":{\"list\":[{\"fName\":\"NoSuchFont\",\"fFamily\":\"NoSuchFont\",\"fStyle\":\"Regular\",\"ascent\":75}]}");
+                var data = Compiler.LottieCompiler.Compile(json, new Compiler.LottieCompileOptions { FontResolver = _ => null, EmojiFontPath = path });
+                Assert.IsTrue(Array.Exists(data.Glyphs, g => g.Image >= 0), "an emoji glyph bitmap was created");
+                using var anim = LottieAnimation.FromData(data);
+                using var state = new LottieRenderState();
+                var px = new NativeArray<uint>(100 * 100, Allocator.Persistent);
+                try
+                {
+                    // Glyph box at size 40: x 54..86, y 18..50 (baseline at the layer position).
+                    state.RenderImmediate(anim, 0, LottieRenderState.FitTransform(anim.Width, anim.Height, 100, 100, false), px, 100, 100);
+                    var pixels = px.ToArray();
+                    Color32 left = At(pixels, 56, 34), right = At(pixels, 84, 34);
+                    Assert.Greater(left.r, 200, $"red at the start of the gradient ({left})");
+                    Assert.Greater(right.g, 200, $"green at the end of the gradient ({right})");
+                    Assert.AreEqual(0, At(pixels, 50, 80).a, "nothing below the baseline");
+                }
+                finally
+                {
+                    px.Dispose();
+                }
+            }
+            finally
+            {
+                System.IO.File.Delete(path);
+            }
+        }
+
         [Test]
         public void Text_WithoutAnyFont_DrawsNothingAndDoesNotCrash()
         {

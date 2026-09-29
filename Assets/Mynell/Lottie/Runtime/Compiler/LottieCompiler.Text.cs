@@ -286,7 +286,7 @@ namespace Mynell.Lottie.Compiler
         }
 
         internal string EmojiFontPath;
-        internal Text.EmojiFont _emoji;
+        internal readonly List<Text.EmojiFont> _emoji = new List<Text.EmojiFont>();
         bool _emojiLoaded;
         readonly Dictionary<string, int> _emojiGlyphs = new Dictionary<string, int>();
 
@@ -304,10 +304,22 @@ namespace Mynell.Lottie.Compiler
             if (!_emojiLoaded)
             {
                 _emojiLoaded = true;
-                string path = EmojiFontPath ?? Text.EmojiFont.SystemFontPath();
-                if (!string.IsNullOrEmpty(path)) _emoji = Text.EmojiFont.Open(path);
+                var paths = EmojiFontPath != null ? new List<string> { EmojiFontPath } : Text.EmojiFont.SystemFontPaths();
+                foreach (var path in paths)
+                {
+                    var font = string.IsNullOrEmpty(path) ? null : Text.EmojiFont.Open(path);
+                    if (font != null) _emoji.Add(font);
+                }
             }
-            if (_emoji == null || !_emoji.TryGetGlyph(ch, out var bitmap))
+            Text.EmojiFont.Glyph bitmap = default;
+            bool found = false;
+            foreach (var font in _emoji)
+                if (font.TryGetGlyph(ch, out bitmap))
+                {
+                    found = true;
+                    break;
+                }
+            if (!found)
             {
                 _emojiGlyphs[ch] = -1;
                 return false;

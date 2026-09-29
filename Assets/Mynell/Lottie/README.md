@@ -246,9 +246,11 @@ the text is drawn with a common sans-serif font and the asset Inspector says whi
 text on a path and glyphs exported as animated compositions are supported.
 
 **Emoji** in text without embedded glyphs are drawn in colour like in a browser: the importer takes them from the
-system's colour emoji font (Apple Color Emoji on macOS, Noto Color Emoji on Android / Linux), including skin tones,
-ZWJ sequences, flags and keycaps, and stores the bitmaps in the asset, so they show on every platform.
-`LottieCompileOptions.EmojiFontPath` selects another font (a bitmap emoji font such as Noto Color Emoji).
+system's colour emoji font (Apple Color Emoji on macOS / iOS, Segoe UI Emoji on Windows, Noto Color Emoji on Android /
+Linux), including skin tones, ZWJ sequences, flags and keycaps, and stores the bitmaps in the asset, so they show on
+every platform. Bitmap glyphs ('sbix', 'CBDT') are used as they are; vector colour glyphs ('COLR' version 0 layers and
+version 1 gradients, transforms and composites) are rendered the way Chrome renders them.
+`LottieCompileOptions.EmojiFontPath` selects another colour font.
 
 Text compiled at runtime (`LottieAsset.CreateFromJson`) can only use the fonts of the device; on WebGL there are none,
 so import such animations in the Editor or pass a font through `LottieCompileOptions.FontResolver`.

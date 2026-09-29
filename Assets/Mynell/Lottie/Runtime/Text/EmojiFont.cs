@@ -2,13 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Unity.Mathematics;
 
 namespace Mynell.Lottie.Text
 {
     /// <summary>
-    /// Colour emoji from bitmap fonts: Apple Color Emoji ('sbix') and Noto Color Emoji ('CBDT' / 'CBLC'). Only the tables
-    /// needed are read (the fonts are large). Emoji sequences (skin tones, ZWJ, flags, keycaps) are resolved through the
-    /// glyph names (Apple) or 'GSUB' ligatures (Noto).
+    /// Colour emoji fonts: bitmap glyphs of Apple Color Emoji ('sbix') and Noto Color Emoji ('CBDT' / 'CBLC'), and colour
+    /// vector glyphs ('COLR' / 'CPAL' versions 0 and 1: Segoe UI Emoji, Noto Color Emoji on Android 13+) rendered into
+    /// bitmaps. Only the tables needed are read from bitmap fonts (they are large). Emoji sequences (skin tones, ZWJ,
+    /// flags, keycaps) are resolved through the glyph names (Apple) or 'GSUB' ligatures.
     /// </summary>
     public sealed class EmojiFont : IDisposable
     {
@@ -35,6 +37,9 @@ namespace Mynell.Lottie.Text
         int _cbdtPpem;
         // GSUB ligatures: first glyph -> list of (components after the first, ligature glyph).
         Dictionary<int, List<(int[] rest, int glyph)>> _ligatures;
+        // COLR: colour glyphs drawn from outlines, rendered at this size.
+        ColrGlyphs _colr;
+        const float ColrPpem = 160f;
 
         EmojiFont(Stream s, long fontOffset)
         {
@@ -42,23 +47,40 @@ namespace Mynell.Lottie.Text
             _base = fontOffset;
         }
 
-        /// <summary>Well-known colour emoji fonts of the current OS (first existing path), null when none.</summary>
+        /// <summary>Well-known colour emoji font of the current OS (the first of <see cref="SystemFontPaths"/>), null when none.</summary>
         public static string SystemFontPath()
         {
-            string[] candidates =
+            var paths = SystemFontPaths();
+            return paths.Count > 0 ? paths[0] : null;
+        }
+
+        /// <summary>The colour emoji fonts of the current OS, in lookup order (Android 13+ keeps flags in a font of their own).</summary>
+        public static List<string> SystemFontPaths()
+        {
+            var candidates = new List<string>
             {
-                "/System/Library/Fonts/Apple Color Emoji.ttc",
-                "/System/Library/Fonts/Core/AppleColorEmoji.ttc",
-                "/system/fonts/NotoColorEmoji.ttf",
+                "/System/Library/Fonts/Apple Color Emoji.ttc",              // macOS
+                "/System/Library/Fonts/Core/AppleColorEmoji.ttc",           // iOS
+                "/system/fonts/NotoColorEmoji.ttf",                         // Android (COLRv1 since Android 13)
                 "/system/fonts/NotoColorEmojiLegacy.ttf",
-                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/system/fonts/NotoColorEmojiFlags.ttf",
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",        // Linux
                 "/usr/share/fonts/noto/NotoColorEmoji.ttf",
                 "/usr/share/fonts/google-noto-emoji/NotoColorEmoji.ttf",
+                "/usr/share/fonts/google-noto-color-emoji-fonts/Noto-COLRv1.ttf",
+                "/usr/share/fonts/google-noto-color-emoji-fonts/NotoColorEmoji.ttf",
             };
+            try
+            {
+                string windows = Environment.GetEnvironmentVariable("WINDIR");
+                if (!string.IsNullOrEmpty(windows)) candidates.Insert(0, Path.Combine(windows, "Fonts", "seguiemj.ttf"));
+            }
+            catch (Exception) { }
+            var found = new List<string>();
             foreach (var p in candidates)
-                try { if (File.Exists(p)) return p; }
+                try { if (File.Exists(p)) found.Add(p); }
                 catch (Exception) { }
-            return null;
+            return found;
         }
 
         /// <summary>Opens a bitmap emoji font file (.ttf / .ttc); null when it has no supported colour glyphs.</summary>
@@ -107,7 +129,8 @@ namespace Mynell.Lottie.Text
                 string tag = Encoding.ASCII.GetString(records, i * 16, 4);
                 _tables[tag] = (U32(records, i * 16 + 8), (int)U32(records, i * 16 + 12));
             }
-            if (!_tables.ContainsKey("cmap") || !(_tables.ContainsKey("sbix") || _tables.ContainsKey("CBDT"))) return false;
+            bool colr = _tables.ContainsKey("COLR") && _tables.ContainsKey("CPAL");
+            if (!_tables.ContainsKey("cmap") || !(_tables.ContainsKey("sbix") || _tables.ContainsKey("CBDT") || colr)) return false;
             var headT = Table("head");
             _unitsPerEm = Math.Max(1, U16(headT, 18));
             _numGlyphs = U16(Table("maxp"), 4);
@@ -125,7 +148,13 @@ namespace Mynell.Lottie.Text
             if (_tables.ContainsKey("sbix")) ParseSbix();
             if (_sbixStrike < 0 && _tables.ContainsKey("CBDT") && _tables.ContainsKey("CBLC")) ParseCblc();
             if (_tables.ContainsKey("GSUB")) ParseGsub(Table("GSUB"));
-            return _sbixStrike >= 0 || _cbdt != null;
+            if (_sbixStrike < 0 && _cbdt == null && colr && _s.Length <= 64L << 20)
+            {
+                // Colour vector glyphs are drawn from the outlines: the whole font is read (a few MB).
+                var data = Read(_s, 0, (int)_s.Length);
+                _colr = ColrGlyphs.Create(data, (int)_base, (int)_tables["COLR"].offset, (int)_tables["CPAL"].offset);
+            }
+            return _sbixStrike >= 0 || _cbdt != null || _colr != null;
         }
 
         byte[] Table(string tag)
@@ -270,6 +299,21 @@ namespace Mynell.Lottie.Text
                 if (rec.format == 19 && PngSize(png, out int pw, out int ph)) { w = pw; h = ph; }
                 float s = 100f / _cbdtPpem;
                 glyph = new Glyph { Png = png, X = bx * s, Y = -by * s, Width = w * s, Height = h * s, Advance = advance };
+                return true;
+            }
+            if (_colr != null && _colr.Has(gid))
+            {
+                if (!_colr.Render(gid, ColrPpem, out var rgba, out int w, out int h, out var box)) return false;
+                float k = 100f / _colr.UnitsPerEm;
+                glyph = new Glyph
+                {
+                    Png = PngWriter.Encode(rgba, w, h),
+                    X = box.x * k,
+                    Y = -box.w * k,
+                    Width = (box.z - box.x) * k,
+                    Height = (box.w - box.y) * k,
+                    Advance = advance,
+                };
                 return true;
             }
             return false;

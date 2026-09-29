@@ -15,8 +15,9 @@ namespace Mynell.Lottie.Compiler
         /// <summary>Supplies font files for text whose glyphs are not embedded in the animation.</summary>
         public System.Func<LottieFontRequest, byte[]> FontResolver;
         /// <summary>
-        /// Colour emoji font (Apple Color Emoji / Noto Color Emoji style bitmap font) for emoji in text without embedded
-        /// glyphs. Null: the system's emoji font; empty: no emoji.
+        /// Colour emoji font (.ttf / .ttc with 'sbix', 'CBDT' or 'COLR' colour glyphs, such as Apple Color Emoji, Noto
+        /// Color Emoji or Segoe UI Emoji) for emoji in text without embedded glyphs. Null: the system's emoji fonts;
+        /// empty: no emoji.
         /// </summary>
         public string EmojiFontPath;
     }
@@ -72,7 +73,10 @@ namespace Mynell.Lottie.Compiler
                 EmojiFontPath = options?.EmojiFontPath,
             };
             try { return c.Run(doc.Root); }
-            finally { c._emoji?.Dispose(); }
+            finally
+            {
+                foreach (var font in c._emoji) font.Dispose();
+            }
         }
 
         bool BakeExpressions = true;

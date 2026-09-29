@@ -77,6 +77,14 @@ namespace Mynell.Lottie.Text
             return list;
         }
 
+        /// <summary>The font starting at <paramref name="offset"/> of a file (one face of a collection); null when invalid.</summary>
+        internal static TrueTypeFont LoadFace(byte[] data, int offset)
+        {
+            if (data == null || offset < 0 || offset + 12 > data.Length) return null;
+            var f = new TrueTypeFont(data, offset);
+            return f.IsValid ? f : null;
+        }
+
         static uint U32(byte[] d, int o) => (uint)(d[o] << 24 | d[o + 1] << 16 | d[o + 2] << 8 | d[o + 3]);
         int U16(int o) => _d[o] << 8 | _d[o + 1];
         int S16(int o) => (short)(_d[o] << 8 | _d[o + 1]);
