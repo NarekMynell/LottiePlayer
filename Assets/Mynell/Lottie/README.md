@@ -8,7 +8,7 @@ by Burst-compiled jobs into textures, with results matched pixel by pixel agains
   After Effects instead (see [Fidelity](#fidelity)).
 - **Fast.** Burst jobs rasterize with exact-area anti-aliasing and scale across CPU cores. Frames identical to the
   previous one are detected by a content hash, so they are neither rasterized nor uploaded again. At 2048 × 2048, the
-  lottie-web demo animations render in 0.5–1.5 ms per frame on a 12-thread desktop CPU.
+  lottie-web demo animations render in 0.5–1 ms per frame (the heaviest, navidad, in 6 ms) on an Apple M2 Pro.
 - **Complete.** Supports expressions (baked at import), text (embedded glyphs or font files, animators, expression
   selectors, text on a path, colour emoji, animated glyphs), images, precomps, time remapping, masks, track mattes,
   blend modes, merge paths, offset paths, repeaters, trim paths, markers, 3D layers seen through cameras, layer styles
