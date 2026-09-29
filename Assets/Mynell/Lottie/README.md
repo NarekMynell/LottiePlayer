@@ -16,8 +16,8 @@ by Burst-compiled jobs into textures, with results matched pixel by pixel agains
 - **Easy to use.** Drop a `.json` or `.lottie` file into the project, add a **Lottie Image** (uGUI),
   **Lottie Element** (UI Toolkit) or **Lottie Renderer** (world space), and press Play.
 
-Tested with Unity 6000.3 in the Editor and in macOS (Mono and IL2CPP), Android (IL2CPP, ARM64) and WebGL players,
-which render the reference animations identically. Requires Burst, Collections, Mathematics and uGUI.
+Tested with Unity 6000.3 in the Editor and in macOS (Mono and IL2CPP), iOS (simulator), Android (IL2CPP, ARM64) and
+WebGL players, which render the reference animations identically. Requires Burst, Collections, Mathematics and uGUI.
 
 ---
 
