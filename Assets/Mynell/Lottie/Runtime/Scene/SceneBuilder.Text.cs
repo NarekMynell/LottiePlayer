@@ -577,7 +577,7 @@ namespace Mynell.Lottie.Scene
                 float4 strokeColor = new float4(math.round(math.saturate(sc) * 255f) / 255f, 1);
                 Affine2 letterToDevice = m.Then(world);
 
-                // Animator blur (Skottie): each glyph blurred in its own space, sigma = blur × 0.3.
+                // Animator blur (Skottie): each glyph blurred in its own space, sigma = blur x 0.3.
                 float2 blur = float2.zero;
                 for (int a = 0; a < na; a++)
                 {

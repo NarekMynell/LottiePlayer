@@ -30,7 +30,7 @@ namespace Mynell.Lottie
 
     /// <summary>
     /// Playback and rendering of one animation instance into a <see cref="Texture2D"/> (premultiplied alpha, sRGB-encoded
-    /// texels, no hardware sRGB decode — use the included Mynell/Lottie shaders). Rendering runs in Burst jobs scheduled by
+    /// texels, no hardware sRGB decode; use the included Mynell/Lottie shaders). Rendering runs in Burst jobs scheduled by
     /// <see cref="LottieScheduler"/>; components (<see cref="LottieImage"/>, <see cref="LottieRenderer"/>) wrap this class.
     /// </summary>
     public sealed class LottiePlayer : IDisposable
@@ -113,7 +113,7 @@ namespace Mynell.Lottie
             }
         }
 
-        /// <summary>Render target (created on demand, <see cref="Width"/> × <see cref="Height"/>).</summary>
+        /// <summary>Render target (created on demand, <see cref="Width"/> x <see cref="Height"/>).</summary>
         public Texture2D Texture => _texture;
         public int Width => _width;
         public int Height => _height;

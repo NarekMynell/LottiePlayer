@@ -13,7 +13,7 @@ namespace Mynell.Lottie.Raster
     /// Exact-area coverage rasterizer (signed area accumulation, font-rs / FreeType style) with sparse rows:
     /// every accumulation cell written by an edge is flagged in a per-row bitmap, so a row resolves into
     /// single-pixel edge spans plus long constant-coverage interior runs.
-    /// Works on a raster box [0, W) × [0, H) with a fractional clip rectangle inside it: segments are cut
+    /// Works on a raster box [0, W) x [0, H) with a fractional clip rectangle inside it: segments are cut
     /// against the clip in y and clamped (after splitting) in x, which is equivalent to clipping the
     /// polygons against the rectangle, so clip edges are anti-aliased exactly.
     /// </summary>

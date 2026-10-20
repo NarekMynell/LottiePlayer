@@ -6,7 +6,7 @@ namespace Mynell.Lottie
 {
     /// <summary>
     /// UI Toolkit element that plays a <see cref="LottieAsset"/> (UXML: <c>&lt;Mynell.Lottie.LottieElement asset="..." /&gt;</c>,
-    /// or UI Builder ▸ Library ▸ Project ▸ Custom Controls). The animation is rasterized at the element's size in pixels.
+    /// or UI Builder > Library > Project > Custom Controls). The animation is rasterized at the element's size in pixels.
     /// </summary>
     [UxmlElement]
     public partial class LottieElement : VisualElement

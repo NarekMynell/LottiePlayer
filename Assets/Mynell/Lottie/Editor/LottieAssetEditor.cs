@@ -46,9 +46,9 @@ namespace Mynell.Lottie.Editor
             var asset = (LottieAsset)target;
             using (new EditorGUI.DisabledScope(true))
             {
-                EditorGUILayout.LabelField("Size", $"{asset.Width} × {asset.Height}");
+                EditorGUILayout.LabelField("Size", $"{asset.Width} x {asset.Height}");
                 EditorGUILayout.LabelField("Frame rate", $"{asset.FrameRate:0.##} fps");
-                EditorGUILayout.LabelField("Frames", $"{asset.InPoint:0.##} – {asset.OutPoint:0.##} ({asset.TotalFrames:0.##})");
+                EditorGUILayout.LabelField("Frames", $"{asset.InPoint:0.##} - {asset.OutPoint:0.##} ({asset.TotalFrames:0.##})");
                 EditorGUILayout.LabelField("Duration", $"{asset.Duration:0.###} s");
                 EditorGUILayout.LabelField("Bodymovin version", string.IsNullOrEmpty(asset.LottieVersion) ? "-" : asset.LottieVersion);
                 EditorGUILayout.LabelField("Compiled size", EditorUtility.FormatBytes(asset.DataSize));
@@ -63,7 +63,7 @@ namespace Mynell.Lottie.Editor
             if (asset.Unsupported.Length > 0)
             {
                 EditorGUILayout.Space();
-                EditorGUILayout.HelpBox("Not rendered:\n• " + string.Join("\n• ", asset.Unsupported), MessageType.Warning);
+                EditorGUILayout.HelpBox("Not rendered:\n- " + string.Join("\n- ", asset.Unsupported), MessageType.Warning);
             }
             if (asset.Warnings.Length > 0)
             {

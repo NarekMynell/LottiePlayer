@@ -227,8 +227,8 @@ namespace Mynell.Lottie.Raster
         // ------------------------------------------------------------------ drop shadow
 
         /// <summary>
-        /// feGaussianBlur(SourceAlpha) → feOffset → flood colour "in" → merge(shadow, source).
-        /// <paramref name="shadow"/> and <paramref name="tmp"/> are scratch buffers of w × h and 2 × max(w, h) pixels.
+        /// feGaussianBlur(SourceAlpha) -> feOffset -> flood colour "in" -> merge(shadow, source).
+        /// <paramref name="shadow"/> and <paramref name="tmp"/> are scratch buffers of w x h and 2 x max(w, h) pixels.
         /// </summary>
         public static void DropShadow(in EffectOp op, uint* px, int w, int h, uint* shadow, uint* tmp)
         {

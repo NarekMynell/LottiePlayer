@@ -442,7 +442,7 @@ namespace Mynell.Lottie.Expressions
             if (_errors <= 8)
             {
                 string code = site.Code.Replace("\n", " ");
-                if (code.Length > 120) code = code.Substring(0, 120) + "…";
+                if (code.Length > 120) code = code.Substring(0, 120) + "...";
                 _warnings.Add($"Expression on layer '{site.Layer.Name}' failed ({e.Message}): {code}");
             }
         }

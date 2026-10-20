@@ -1249,7 +1249,7 @@ namespace Mynell.Lottie.Raster
                     s._img = imagePixels + info.x;
                     s._imgW = info.y;
                     s._imgH = info.z;
-                    // SVG <image preserveAspectRatio="xMidYMid slice"> into the asset's w × h box.
+                    // SVG <image preserveAspectRatio="xMidYMid slice"> into the asset's w x h box.
                     float2 box = p.ImageSize;
                     float scale = math.max(box.x / info.y, box.y / info.z);
                     s._imgScale = new float2(1f / scale);

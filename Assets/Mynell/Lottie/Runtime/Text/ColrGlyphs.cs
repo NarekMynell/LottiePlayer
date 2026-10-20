@@ -48,11 +48,11 @@ namespace Mynell.Lottie.Text
                 return true;
             }
 
-            /// <summary>M about a centre: T(c) · m · T(-c).</summary>
+            /// <summary>M about a centre: T(c) * m * T(-c).</summary>
             public Affine Around(float cx, float cy) => Translate(cx, cy) * this * Translate(-cx, -cy);
         }
 
-        /// <summary>Coverage of the canvas; zero outside [X0, X1) × [Y0, Y1).</summary>
+        /// <summary>Coverage of the canvas; zero outside [X0, X1) x [Y0, Y1).</summary>
         sealed class Mask
         {
             public float[] Cov;
@@ -663,14 +663,14 @@ namespace Mynell.Lottie.Text
             mask.Y1 = math.max(y0, math.min(mask.Y1, clip.Y1));
         }
 
-        /// <summary>Anti-aliased coverage of closed paths (signed area accumulation, non-zero approximated by |winding| ≤ 1).</summary>
+        /// <summary>Anti-aliased coverage of closed paths (signed area accumulation, non-zero approximated by |winding| <= 1).</summary>
         sealed class Coverage
         {
             readonly int _w, _h, _stride;
             readonly float[] _acc;
             int _minX = int.MaxValue, _minY = int.MaxValue, _maxX = int.MinValue, _maxY = int.MinValue;
 
-            /// <param name="acc">Zeroed accumulation buffer of (w + 2) × h, left zeroed by <see cref="Resolve"/>.</param>
+            /// <param name="acc">Zeroed accumulation buffer of (w + 2) x h, left zeroed by <see cref="Resolve"/>.</param>
             public Coverage(int w, int h, float[] acc)
             {
                 _w = w;
@@ -775,7 +775,7 @@ namespace Mynell.Lottie.Text
                 }
             }
 
-            /// <param name="cov">Zeroed coverage buffer of w × h.</param>
+            /// <param name="cov">Zeroed coverage buffer of w x h.</param>
             public Mask Resolve(float[] cov)
             {
                 var mask = new Mask { Cov = cov };

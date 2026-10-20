@@ -8,12 +8,12 @@ namespace Mynell.Lottie.Text
     [BurstCompile]
     static unsafe class ColrKernels
     {
-        /// <summary>A gradient fill: pixel centre → paint space, the geometry and the colour line lookup table.</summary>
+        /// <summary>A gradient fill: pixel centre -> paint space, the geometry and the colour line lookup table.</summary>
         public struct Gradient
         {
             public float A, B, C, D, E, F;
             public int Kind;                        // 0 linear, 1 radial (two-point conical), 2 sweep
-            public float2 P0, Dir;                  // linear: t = (q - p0) · dir
+            public float2 P0, Dir;                  // linear: t = (q - p0) * dir
             public float2 C0, Cd;                   // radial: circles (c0, r0) -> (c0 + cd, r0 + dr)
             public float R0, Dr, Qa;
             public float Start, Sweep;              // sweep: degrees, counter-clockwise
@@ -146,7 +146,7 @@ namespace Mynell.Lottie.Text
             return lut[(int)(u * g.LutSize + 0.5f)];
         }
 
-        /// <summary>Two-point conical gradient: the largest t whose circle (radius ≥ 0) passes through the point.</summary>
+        /// <summary>Two-point conical gradient: the largest t whose circle (radius >= 0) passes through the point.</summary>
         static bool Conical(float2 pd, float2 cd, float r0, float dr, float a, out float t)
         {
             float b = math.dot(pd, cd) + r0 * dr;

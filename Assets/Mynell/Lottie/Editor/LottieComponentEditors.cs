@@ -87,7 +87,7 @@ namespace Mynell.Lottie.Editor
         {
             if (asset.MarkerCount == 0) return;
             var names = new string[asset.MarkerCount + 1];
-            names[0] = "Go to marker…";
+            names[0] = "Go to marker...";
             for (int i = 0; i < asset.MarkerCount; i++) names[i + 1] = asset.GetMarkerName(i);
             int pick = EditorGUILayout.Popup(" ", 0, names);
             if (pick > 0) goTo(asset.GetMarkerTime(pick - 1));
@@ -140,7 +140,7 @@ namespace Mynell.Lottie.Editor
                 "Texture resolution relative to the element's on-screen pixel size."));
             EditorGUILayout.PropertyField(m_MaxTextureSize);
             if (targets.Length == 1 && image.isActiveAndEnabled && image.Player.Texture != null)
-                EditorGUILayout.LabelField(" ", $"{image.Player.Width} × {image.Player.Height} px", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(" ", $"{image.Player.Width} x {image.Player.Height} px", EditorStyles.miniLabel);
 
             if (targets.Length == 1)
                 LottieEditorGUI.Preview(serializedObject, m_EditorPreviewTime, image.Asset, image.isActiveAndEnabled ? image.Player : null,
@@ -206,7 +206,7 @@ namespace Mynell.Lottie.Editor
             EditorGUILayout.PropertyField(m_TextureScale, new GUIContent("Texture Scale", "Texture resolution relative to the composition size."));
             EditorGUILayout.PropertyField(m_MaxTextureSize);
             if (targets.Length == 1 && renderer.isActiveAndEnabled && renderer.Player.Texture != null)
-                EditorGUILayout.LabelField(" ", $"{renderer.Player.Width} × {renderer.Player.Height} px", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(" ", $"{renderer.Player.Width} x {renderer.Player.Height} px", EditorStyles.miniLabel);
 
             if (targets.Length == 1)
                 LottieEditorGUI.Preview(serializedObject, m_EditorPreviewTime, renderer.Asset, renderer.isActiveAndEnabled ? renderer.Player : null,

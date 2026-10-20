@@ -100,7 +100,7 @@ namespace Mynell.Lottie.Text
         {
             if (_index == null) BuildIndex();
             string path = null;
-            // 1. PostScript name (fName) — the most specific.
+            // 1. PostScript name (fName), the most specific.
             foreach (var e in _index) if (Eq(e.PostScript, req.Name)) { path = e.Path; break; }
             // 2. family + style (typographic names first).
             if (path == null)

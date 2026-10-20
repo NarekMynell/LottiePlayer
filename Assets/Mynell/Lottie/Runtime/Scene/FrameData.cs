@@ -57,13 +57,13 @@ namespace Mynell.Lottie.Scene
         public byte Reserved0; public ushort Reserved1;
         /// <summary>Solid color, straight alpha, 0..1 (sRGB encoded).</summary>
         public float4 Color;
-        /// <summary>Extra opacity multiplier (fill-opacity × collapsed group opacities).</summary>
+        /// <summary>Extra opacity multiplier (fill-opacity x collapsed group opacities).</summary>
         public float Opacity;
         /// <summary>Device pixels -> paint space (gradient / image coordinates).</summary>
         public Affine2 DeviceToPaint;
         public float2 P0, P1, Focal;
         public float Radius;
-        /// <summary>Merged gradient stops in <see cref="FrameData.PaintFloats"/>: (offset, r, g, b, a) × count.</summary>
+        /// <summary>Merged gradient stops in <see cref="FrameData.PaintFloats"/>: (offset, r, g, b, a) x count.</summary>
         public int StopFirst, StopCount;
         public int Image;
         public float2 ImageSize;
@@ -133,7 +133,7 @@ namespace Mynell.Lottie.Scene
         /// X/Y = offset, Z = sigma x, W = sigma y), GaussianBlur(Z = sigma x, W = sigma y).</summary>
         public float4 A, B, C, D;
         public float X, Y, Z, W;
-        /// <summary>Levels: 5 × 256 floats in <see cref="FrameData.PaintFloats"/> (R, G, B, A, composite RGB); -1 when a table is identity.</summary>
+        /// <summary>Levels: 5 x 256 floats in <see cref="FrameData.PaintFloats"/> (R, G, B, A, composite RGB); -1 when a table is identity.</summary>
         public int TableR, TableG, TableB, TableA, TableRGB;
         /// <summary>Kind-specific parameter block in <see cref="FrameData.PaintFloats"/> (-1 = none).</summary>
         public int Data;

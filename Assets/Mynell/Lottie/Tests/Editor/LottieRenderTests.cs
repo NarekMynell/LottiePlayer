@@ -63,7 +63,7 @@ namespace Mynell.Lottie.Tests
         [Test]
         public void SolidRectangle_CoversExactPixels()
         {
-            // 40 × 40 square centered at (50, 50): pixels 30..69 are covered.
+            // 40 x 40 square centered at (50, 50): pixels 30..69 are covered.
             var px = Render(Comp(ShapeLayer(Rect(0, 0, 40, 40) + "," + Fill(1, 0, 0))), 0);
             AssertColor(new Color32(255, 0, 0, 255), At(px, 50, 50), 0, "center");
             AssertColor(new Color32(255, 0, 0, 255), At(px, 30, 30), 0, "first covered pixel");
@@ -203,7 +203,7 @@ namespace Mynell.Lottie.Tests
                 player.Play();
                 player.Advance(1f);                      // 30 frames
                 Assert.AreEqual(30f, player.Frame, 1e-3f);
-                player.Advance(1.5f);                    // 75 → wraps to 15
+                player.Advance(1.5f);                    // 75 -> wraps to 15
                 Assert.AreEqual(15f, player.Frame, 1e-3f);
                 Assert.AreEqual(1, loops);
 
@@ -215,7 +215,7 @@ namespace Mynell.Lottie.Tests
 
                 player.LoopMode = LottieLoopMode.PingPong;
                 player.GoToAndPlay(50);
-                player.Advance(0.5f);                    // 50 + 15 → bounces at 59 → 53
+                player.Advance(0.5f);                    // 50 + 15 -> bounces at 59 -> 53
                 Assert.AreEqual(53f, player.Frame, 1e-3f);
             }
             finally

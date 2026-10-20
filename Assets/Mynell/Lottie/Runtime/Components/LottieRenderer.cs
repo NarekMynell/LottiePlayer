@@ -5,7 +5,7 @@ namespace Mynell.Lottie
 {
     /// <summary>
     /// Plays a <see cref="LottieAsset"/> on a quad in world space (2D games, 3D scenes). Size is
-    /// composition size / <see cref="PixelsPerUnit"/>; the texture resolution is composition size × <see cref="TextureScale"/>.
+    /// composition size / <see cref="PixelsPerUnit"/>; the texture resolution is composition size x <see cref="TextureScale"/>.
     /// Sorting layer / order are taken from the MeshRenderer.
     /// </summary>
     [AddComponentMenu("Rendering/Lottie Renderer")]

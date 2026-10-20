@@ -331,7 +331,7 @@ namespace Mynell.Lottie.Model
 
     /// <summary>
     /// A text selector: a range selector (props S, E, O, Xe, Ne, Sm, A), or an expression selector whose amounts were baked
-    /// per frame and letter index into <see cref="LottieData.TextFloats"/> (ExprFirst: ExprFrames × ExprTotal values from
+    /// per frame and letter index into <see cref="LottieData.TextFloats"/> (ExprFirst: ExprFrames x ExprTotal values from
     /// frame ExprT0).
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]

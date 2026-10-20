@@ -621,7 +621,7 @@ namespace Mynell.Lottie.Raster
 
         /// <summary>
         /// Drop shadow (Flags 0: blurred, offset alpha below the source) or inner shadow (Flags 1: blurred, offset inverse
-        /// alpha masked by the source, above it). <paramref name="tmp"/>: 2 w×h + 2 max(w, h) + 2 pixels.
+        /// alpha masked by the source, above it). <paramref name="tmp"/>: 2 w*h + 2 max(w, h) + 2 pixels.
         /// </summary>
         public static void StyleShadow(in EffectOp op, in Target t, uint* tmp)
         {
@@ -657,7 +657,7 @@ namespace Mynell.Lottie.Raster
 
         /// <summary>
         /// Glows (Flags bit 0 inner, bit 1 inner from the centre) and the stroke style (bit 2: dilated alpha below the
-        /// source). <paramref name="tmp"/>: 2 w×h + 2 max(w, h) + 2 pixels.
+        /// source). <paramref name="tmp"/>: 2 w*h + 2 max(w, h) + 2 pixels.
         /// </summary>
         public static void StyleGlow(in EffectOp op, in Target t, uint* tmp)
         {

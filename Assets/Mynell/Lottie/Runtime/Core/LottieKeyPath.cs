@@ -23,7 +23,7 @@ namespace Mynell.Lottie
     }
 
     /// <summary>
-    /// Resolves key paths — names from the After Effects hierarchy separated by '/', like lottie-android's KeyPath:
+    /// Resolves key paths: names from the After Effects hierarchy separated by '/', like lottie-android's KeyPath:
     /// layer names (precomp layers contain the layers of their composition), then shape groups and items.
     /// '*' matches exactly one level, '**' any number of levels (including none). Example: "Button/**/Fill 1".
     /// </summary>

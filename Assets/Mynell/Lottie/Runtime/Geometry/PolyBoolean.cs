@@ -9,7 +9,7 @@ namespace Mynell.Lottie.Geometry
     /// Boolean operations on polygon regions (flattened paths), used by Merge Paths.
     /// Every edge is split at all intersections; each piece is kept when the combined region differs on its two sides,
     /// oriented so the region lies on its left, and the kept pieces are chained into closed contours. Each operand is
-    /// interpreted with the non-zero rule; operands are combined in order: ((op0 ∘ op1) ∘ op2) ...
+    /// interpreted with the non-zero rule; operands are combined in order: op0 with op1, the result with op2, and so on.
     /// </summary>
     public static unsafe class PolyBoolean
     {

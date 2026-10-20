@@ -307,7 +307,7 @@ namespace Mynell.Lottie.Text
         }
 
         /// <summary>
-        /// Outline of a glyph in Lottie glyph space (font size 100 → scale 100 / unitsPerEm, y flipped).
+        /// Outline of a glyph in Lottie glyph space (font size 100 -> scale 100 / unitsPerEm, y flipped).
         /// </summary>
         public List<GlyphOutlineContour> Outline(int glyph)
         {

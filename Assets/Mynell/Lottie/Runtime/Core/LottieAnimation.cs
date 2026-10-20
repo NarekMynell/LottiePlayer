@@ -132,7 +132,7 @@ namespace Mynell.Lottie
             }
         }
 
-        /// <summary>Pixel count of an image and its mip levels (halved down to 1 × 1).</summary>
+        /// <summary>Pixel count of an image and its mip levels (halved down to 1 x 1).</summary>
         static int MipChainSize(int w, int h, out int levels)
         {
             int total = 0;
@@ -281,7 +281,7 @@ namespace Mynell.Lottie
             return math.clamp(math.min(max, height / MinBandHeight), 1, 64);
         }
 
-        /// <summary>Schedules rendering into <paramref name="pixels"/> (width × height RGBA32, premultiplied).</summary>
+        /// <summary>Schedules rendering into <paramref name="pixels"/> (width x height RGBA32, premultiplied).</summary>
         public unsafe JobHandle Schedule(LottieAnimation anim, float absoluteFrame, Affine2 compToDevice,
             NativeArray<uint> pixels, int width, int height, JobHandle dependsOn = default)
         {

@@ -17,7 +17,7 @@ namespace Mynell.Lottie.Scene
 
         static float4x4 Translate(float x, float y, float z) => float4x4.Translate(new float3(x, y, z));
 
-        /// <summary>Skottie TransformAdapter3D: T(p) · Rx · Ry · Rz · S · T(-a) (degrees, orientation + axis rotations).</summary>
+        /// <summary>Skottie TransformAdapter3D: T(p) * Rx * Ry * Rz * S * T(-a) (degrees, orientation + axis rotations).</summary>
         float4x4 Local3D(int li, float t)
         {
             LayerData L = Layers[li];

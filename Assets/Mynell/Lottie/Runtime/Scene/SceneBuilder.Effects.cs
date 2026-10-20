@@ -116,7 +116,7 @@ namespace Mynell.Lottie.Scene
         /// <summary>Stroke effect paint style: 1 on original image, 2 on transparent, 3 reveal original image.</summary>
         int StrokeEffectPaintStyle(in EffectData e, float t) => math.clamp((int)math.round(EffectScalar(e, 10, t, 1)), 1, 3);
 
-        /// <summary>lottie-web SVGStrokeEffect: strokes the layer's mask paths (round caps, width = 2 × brush size).</summary>
+        /// <summary>lottie-web SVGStrokeEffect: strokes the layer's mask paths (round caps, width = 2 x brush size).</summary>
         void EmitStrokeEffect(in LayerData L, in EffectData e, float t, in Affine2 world, float4 clip, float opacity, bool asMatte)
         {
             bool all = EffectScalar(e, 1, t, 0) == 1;
@@ -1048,7 +1048,7 @@ namespace Mynell.Lottie.Scene
         public static ColorMatrix Diagonal(float4 scale, float4 offset) =>
             new ColorMatrix { M = new float4x4(scale.x, 0, 0, 0, 0, scale.y, 0, 0, 0, 0, scale.z, 0, 0, 0, 0, scale.w), Offset = offset };
 
-        /// <summary>a ∘ b: applies b first.</summary>
+        /// <summary>Product a * b: applies b first.</summary>
         public static ColorMatrix Mul(in ColorMatrix a, in ColorMatrix b) =>
             new ColorMatrix { M = math.mul(a.M, b.M), Offset = math.mul(a.M, b.Offset) + a.Offset };
     }

@@ -440,7 +440,7 @@ namespace Mynell.Lottie.Scene
 
         // ------------------------------------------------------------------ transforms
 
-        /// <summary>Layer matrix including parents (lottie-web: own × parent × grandparent, 4x4) projected to 2D.</summary>
+        /// <summary>Layer matrix including parents (lottie-web: own x parent x grandparent, 4x4) projected to 2D.</summary>
         internal Affine2 LayerWorld(int li, float compTime)
         {
             float4x4 m = LayerLocal(li, compTime);
