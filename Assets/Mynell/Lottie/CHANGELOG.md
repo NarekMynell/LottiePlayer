@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Faster drawing with the same pixels: at 1024 x 1024 a frame is 1.9x faster on one core and 1.7x faster with all
+  cores. Every frame of the 204 test animations renders bit for bit as before.
+
 ## [1.0.0]
 
 First release.

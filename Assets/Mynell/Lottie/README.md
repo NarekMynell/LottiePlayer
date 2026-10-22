@@ -178,12 +178,14 @@ rlottie), every frame (26,241 frames), drawing only, no GPU upload. Apple M2 Pro
 
 | | **Mynell, all cores** | Mynell, 1 core | ThorVG for Unity | SkiaForUnity | rlottie players |
 | --- | --- | --- | --- | --- | --- |
-| 512 x 512 | 0.23 | 0.51 | 0.25 | 0.42 | 0.10 - 0.12 |
-| 1024 x 1024 | 0.49 | 1.51 | 0.72 | 1.42 | 0.27 - 0.37 |
-| 1024 x 1024, 10 heaviest files | 1.36 | 5.18 | 2.82 | 4.42 | 0.93 - 1.11 |
+| 512 x 512 | 0.18 | 0.32 | 0.25 | 0.42 | 0.10 - 0.12 |
+| 1024 x 1024 | 0.28 | 0.78 | 0.72 | 1.41 | 0.27 - 0.37 |
+| 1024 x 1024, 10 heaviest files | 0.49 | 1.88 | 2.89 | 4.11 | 0.90 - 1.09 |
 
-So rlottie is the fastest, but it skips text and effects. On the 23 files that every player draws the same way,
-at 1024 x 1024: rlottie 0.20 - 0.26 ms, Mynell 0.28 ms, ThorVG 0.43 ms, SkiaForUnity 1.21 ms. Mynell also doesn't
+So rlottie is the fastest on average, but it skips text and effects. The 10 heaviest files are the ones ThorVG takes
+longest on (blurs, mattes, masks, effects): there Mynell with all cores is the fastest, and on one core it is faster
+than ThorVG and SkiaForUnity. On the 23 files that every player draws the same way, at 1024 x 1024: rlottie
+0.20 - 0.26 ms, Mynell 0.21 ms (0.47 ms on one core), ThorVG 0.43 ms, SkiaForUnity 1.21 ms. Mynell also doesn't
 redraw or re-upload frames that didn't change (pauses, holds), which this test doesn't show.
 
 How the test was done:
