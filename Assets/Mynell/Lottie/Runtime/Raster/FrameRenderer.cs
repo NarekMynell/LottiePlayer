@@ -13,6 +13,10 @@ namespace Mynell.Lottie.Raster
         public NativeList<float2> GeoPts;
         public NativeList<Poly> GeoPolys;
         public NativeList<int2> ItemGeo;
+        public NativeList<uint> Luts;
+        public NativeList<int> PaintLut;
+        public NativeList<float> LutKeys;
+        public NativeList<int4> LutEntries;
         public NativeList<float4> ItemBounds;
         public NativeList<int4> GroupRect;
         public NativeList<float4> GroupContent;
@@ -41,6 +45,10 @@ namespace Mynell.Lottie.Raster
                 GeoPts = new NativeList<float2>(4096, Allocator.Persistent),
                 GeoPolys = new NativeList<Poly>(256, Allocator.Persistent),
                 ItemGeo = new NativeList<int2>(64, Allocator.Persistent),
+                Luts = new NativeList<uint>(0, Allocator.Persistent),
+                PaintLut = new NativeList<int>(64, Allocator.Persistent),
+                LutKeys = new NativeList<float>(0, Allocator.Persistent),
+                LutEntries = new NativeList<int4>(0, Allocator.Persistent),
                 ItemBounds = new NativeList<float4>(64, Allocator.Persistent),
                 GroupRect = new NativeList<int4>(16, Allocator.Persistent),
                 GroupContent = new NativeList<float4>(16, Allocator.Persistent),
@@ -67,7 +75,7 @@ namespace Mynell.Lottie.Raster
         public void Dispose()
         {
             if (!GeoPts.IsCreated) return;
-            GeoPts.Dispose(); GeoPolys.Dispose(); ItemGeo.Dispose(); ItemBounds.Dispose();
+            GeoPts.Dispose(); GeoPolys.Dispose(); ItemGeo.Dispose(); ItemBounds.Dispose(); Luts.Dispose(); PaintLut.Dispose(); LutKeys.Dispose(); LutEntries.Dispose();
             GroupRect.Dispose(); GroupContent.Dispose(); GroupMaskBounds.Dispose(); GroupMatteBounds.Dispose(); GroupReach.Dispose();
             LocalPts.Dispose(); LocalPolys.Dispose(); DashPts.Dispose(); DashPolys.Dispose(); StrokeTmp.Dispose();
             Arena.Dispose(); MaskArena.Dispose(); Acc.Dispose(); RowMin.Dispose(); RowMax.Dispose(); Bits.Dispose(); Spans.Dispose();
@@ -134,6 +142,69 @@ namespace Mynell.Lottie.Raster
             if (!G.GeoPts.IsCreated) G = R;
             BuildGeometry();
             ComputeGroupBounds();
+            BuildLuts();
+        }
+
+        const int MaxCachedLuts = 256;
+
+        /// <summary>
+        /// Gradient colour tables of the drawn paints, built once and shared by all bands. Tables are kept across frames
+        /// and reused when the inputs of the table (opacity, stop count and stop values) are bit for bit the same.
+        /// </summary>
+        void BuildLuts()
+        {
+            int np = F.Paints.Length;
+            PaintData* paints = (PaintData*)F.Paints.GetUnsafeReadOnlyPtr();
+            bool any = false;
+            for (int p = 0; p < np && !any; p++) any = paints[p].Kind == PaintKind.Linear || paints[p].Kind == PaintKind.Radial;
+            if (!any) return;
+            DrawItem* items = (DrawItem*)F.Items.GetUnsafeReadOnlyPtr();
+            G.PaintLut.ResizeUninitialized(np);
+            for (int p = 0; p < np; p++) G.PaintLut[p] = -1;
+            if (G.LutEntries.Length > MaxCachedLuts)
+            {
+                G.LutEntries.Clear();
+                G.LutKeys.Clear();
+                G.Luts.Clear();
+            }
+            float* floats = (float*)F.PaintFloats.GetUnsafeReadOnlyPtr();
+            for (int i = 0; i < F.Items.Length; i++)
+            {
+                int p = items[i].Paint;
+                if (p < 0 || p >= np || G.PaintLut[p] != -1) continue;
+                G.PaintLut[p] = -2;
+                ref PaintData paint = ref paints[p];
+                if (paint.Kind != PaintKind.Linear && paint.Kind != PaintKind.Radial) continue;
+                var shader = PaintShader.Create(paint, F.PaintFloats, ImagePixels, ImageInfo, ImageCount);
+                if (shader.Transparent || shader.IsSolid || shader.IsImage) continue;
+                // Key: the opacity the table is scaled by, then the stops (5 floats each).
+                float opacity = math.saturate(paint.Opacity);
+                float* stops = floats + paint.StopFirst;
+                int stopFloats = paint.StopCount * 5;
+                uint hash = math.hash(&opacity, 4) ^ math.hash(stops, stopFloats * 4) * 0x9E3779B1u ^ (uint)paint.StopCount;
+                int found = -1;
+                for (int e = 0; e < G.LutEntries.Length && found < 0; e++)
+                {
+                    int4 en = G.LutEntries[e];
+                    if ((uint)en.w != hash || en.y != stopFloats + 1) continue;
+                    float* key = (float*)G.LutKeys.GetUnsafeReadOnlyPtr() + en.x;
+                    if (UnsafeUtility.MemCmp(key, &opacity, 4) == 0 && UnsafeUtility.MemCmp(key + 1, stops, stopFloats * 4) == 0)
+                        found = en.z;
+                }
+                if (found < 0)
+                {
+                    int keyOffset = G.LutKeys.Length;
+                    G.LutKeys.ResizeUninitialized(keyOffset + stopFloats + 1);
+                    float* key = (float*)G.LutKeys.GetUnsafePtr() + keyOffset;
+                    key[0] = opacity;
+                    UnsafeUtility.MemCpy(key + 1, stops, stopFloats * 4);
+                    found = G.Luts.Length;
+                    G.Luts.ResizeUninitialized(found + PaintShader.LutSize);
+                    shader.BuildLut((uint*)G.Luts.GetUnsafePtr() + found);
+                    G.LutEntries.Add(new int4(keyOffset, stopFloats + 1, found, (int)hash));
+                }
+                G.PaintLut[p] = found;
+            }
         }
 
         /// <summary>Renders the whole target (single band).</summary>
@@ -994,8 +1065,7 @@ namespace Mynell.Lottie.Raster
             }
             uint solid = shader.IsSolid ? Px8.Pack(shader.Solid) : 0;
             bool gradient = !shader.IsSolid && !shader.IsImage;
-            uint* lut = stackalloc uint[gradient ? PaintShader.LutSize : 1];
-            if (gradient) shader.BuildLut(lut);
+            uint* lut = gradient ? (uint*)G.Luts.GetUnsafeReadOnlyPtr() + G.PaintLut[item.Paint] : null;
             int rowStart = target.X0 - box.x, rowEnd = target.X0 + target.W - box.x;
             for (int y = 0; y < h; y++)
             {
