@@ -13,6 +13,8 @@ namespace Mynell.Lottie.Raster
         public NativeList<float2> GeoPts;
         public NativeList<Poly> GeoPolys;
         public NativeList<int2> ItemGeo;
+        public NativeList<FrameRenderer.EdgeChunk> Chunks;
+        public NativeList<int2> ItemChunks;
         public NativeList<uint> Luts;
         public NativeList<int> PaintLut;
         public NativeList<float> LutKeys;
@@ -45,6 +47,8 @@ namespace Mynell.Lottie.Raster
                 GeoPts = new NativeList<float2>(4096, Allocator.Persistent),
                 GeoPolys = new NativeList<Poly>(256, Allocator.Persistent),
                 ItemGeo = new NativeList<int2>(64, Allocator.Persistent),
+                Chunks = new NativeList<FrameRenderer.EdgeChunk>(256, Allocator.Persistent),
+                ItemChunks = new NativeList<int2>(64, Allocator.Persistent),
                 Luts = new NativeList<uint>(0, Allocator.Persistent),
                 PaintLut = new NativeList<int>(64, Allocator.Persistent),
                 LutKeys = new NativeList<float>(0, Allocator.Persistent),
@@ -75,7 +79,7 @@ namespace Mynell.Lottie.Raster
         public void Dispose()
         {
             if (!GeoPts.IsCreated) return;
-            GeoPts.Dispose(); GeoPolys.Dispose(); ItemGeo.Dispose(); ItemBounds.Dispose(); Luts.Dispose(); PaintLut.Dispose(); LutKeys.Dispose(); LutEntries.Dispose();
+            GeoPts.Dispose(); GeoPolys.Dispose(); ItemGeo.Dispose(); ItemBounds.Dispose(); Chunks.Dispose(); ItemChunks.Dispose(); Luts.Dispose(); PaintLut.Dispose(); LutKeys.Dispose(); LutEntries.Dispose();
             GroupRect.Dispose(); GroupContent.Dispose(); GroupMaskBounds.Dispose(); GroupMatteBounds.Dispose(); GroupReach.Dispose();
             LocalPts.Dispose(); LocalPolys.Dispose(); DashPts.Dispose(); DashPolys.Dispose(); StrokeTmp.Dispose();
             Arena.Dispose(); MaskArena.Dispose(); Acc.Dispose(); RowMin.Dispose(); RowMax.Dispose(); Bits.Dispose(); Spans.Dispose();
@@ -99,6 +103,16 @@ namespace Mynell.Lottie.Raster
             public byte Uncleared;
             public int4 Rect => new int4(X0, Y0, X0 + W, Y0 + H);
         }
+
+        /// <summary>Up to <see cref="ChunkEdges"/> consecutive edges of a polygon and their vertical extent.</summary>
+        public struct EdgeChunk
+        {
+            public int First, Count;   // polygon (points)
+            public int A, B;           // edges ending at points [A, B)
+            public float MinY, MaxY;
+        }
+
+        const int ChunkEdges = 32;
 
         public struct StackEntry
         {
@@ -124,6 +138,11 @@ namespace Mynell.Lottie.Raster
         public int RootW, RootH;
         /// <summary>Flattening tolerance in device pixels.</summary>
         public float Tolerance;
+        /// <summary>
+        /// The prepared geometry is rasterized by several bands: <see cref="Prepare"/> then splits the edges into chunks
+        /// so that a band skips the edges outside its rows.
+        /// </summary>
+        public bool Banded;
         /// <summary>Optional debug counters: [0] item span pixels, [1] group composite pixels, [2] cleared pixels, [3] edges, [4] items drawn,
         /// [5] gradient / image pixels, [6] opaque solid pixels. Single-threaded use only.</summary>
         [NativeDisableUnsafePtrRestriction] public long* Stats;
@@ -234,6 +253,9 @@ namespace Mynell.Lottie.Raster
             G.GeoPolys.Clear();
             G.ItemGeo.ResizeUninitialized(n);
             G.ItemBounds.ResizeUninitialized(n);
+            G.Chunks.Clear();
+            if (Banded) G.ItemChunks.ResizeUninitialized(n);
+            else G.ItemChunks.Clear();
             float2* pts = (float2*)F.Points.GetUnsafeReadOnlyPtr();
             for (int i = 0; i < n; i++)
             {
@@ -258,6 +280,31 @@ namespace Mynell.Lottie.Raster
                 }
                 G.ItemBounds[i] = b;
                 G.ItemGeo[i] = new int2(polyFirst, G.GeoPolys.Length - polyFirst);
+                if (Banded)
+                {
+                    int chunkFirst = G.Chunks.Length;
+                    for (int p = polyFirst; p < G.GeoPolys.Length; p++) AddChunks(G.GeoPolys[p], gp);
+                    G.ItemChunks[i] = new int2(chunkFirst, G.Chunks.Length - chunkFirst);
+                }
+            }
+        }
+
+        /// <summary>Splits a polygon's edges into chunks, so a band can skip the edges outside its rows.</summary>
+        void AddChunks(in Poly poly, float2* gp)
+        {
+            int n = poly.Count;
+            if (n < 2) return;
+            float2* v = gp + poly.First;
+            for (int a = 0; a < n; a += ChunkEdges)
+            {
+                int b = math.min(n, a + ChunkEdges);
+                float mn = v[(a == 0 ? n : a) - 1].y, mx = mn;
+                for (int k = a; k < b; k++)
+                {
+                    mn = math.min(mn, v[k].y);
+                    mx = math.max(mx, v[k].y);
+                }
+                G.Chunks.Add(new EdgeChunk { First = poly.First, Count = n, A = a, B = b, MinY = mn, MaxY = mx });
             }
         }
 
@@ -1017,9 +1064,29 @@ namespace Mynell.Lottie.Raster
             ras.Begin((float*)R.Acc.GetUnsafePtr(), (ulong*)R.Bits.GetUnsafePtr(), (int*)R.RowMin.GetUnsafePtr(),
                 (int*)R.RowMax.GetUnsafePtr(), w, h, clip);
 
-            int2 geo = G.ItemGeo[itemIndex];
             float2* gp = (float2*)G.GeoPts.GetUnsafeReadOnlyPtr();
             float2 origin = new float2(box.x, box.y);
+            if (G.ItemChunks.Length != 0)
+            {
+                int2 chunks = G.ItemChunks[itemIndex];
+                for (int c = 0; c < chunks.y; c++)
+                {
+                    EdgeChunk ch = G.Chunks[chunks.x + c];
+                    // Edges entirely above or below the box add nothing (Edge returns at once for them).
+                    if (ch.MaxY <= box.y || ch.MinY >= box.w) continue;
+                    float2* v = gp + ch.First;
+                    float2 prev = v[(ch.A == 0 ? ch.Count : ch.A) - 1] - origin;
+                    for (int k = ch.A; k < ch.B; k++)
+                    {
+                        float2 cur = v[k] - origin;
+                        ras.Edge(prev.x, prev.y, cur.x, cur.y);
+                        prev = cur;
+                    }
+                    if (Stats != null) Stats[3] += ch.B - ch.A;
+                }
+                return true;
+            }
+            int2 geo = G.ItemGeo[itemIndex];
             for (int p = 0; p < geo.y; p++)
             {
                 Poly poly = G.GeoPolys[geo.x + p];

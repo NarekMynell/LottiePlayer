@@ -73,6 +73,7 @@ namespace Mynell.Lottie
                 RootW = Width,
                 RootH = Height,
                 Tolerance = Tolerance > 0 ? Tolerance : 0.03f,
+                Banded = PrepareOnly,
                 Stats = Stats,
                 ImagePixels = (uint*)ImagePixels.GetUnsafeReadOnlyPtr(),
                 ImageInfo = (int4*)ImageInfo.GetUnsafeReadOnlyPtr(),
