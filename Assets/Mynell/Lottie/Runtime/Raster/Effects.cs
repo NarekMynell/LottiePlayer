@@ -129,15 +129,21 @@ namespace Mynell.Lottie.Raster
 
         // ------------------------------------------------------------------ gaussian blur (SVG 1.1 approximation)
 
+        /// <summary>Scratch pixels <see cref="BlurRGBA"/> needs for a w x h surface.</summary>
+        public static int BlurTempSize(int w, int h) => 8 * math.max(w, h) + 8;
+
         /// <summary>
         /// Blurs a premultiplied RGBA surface in place. Uses the SVG specification's three box blurs for sigma >= 2
-        /// (as Chrome / Skia do) and an exact Gaussian kernel below.
+        /// (as Chrome / Skia do) and an exact Gaussian kernel below. <paramref name="tmp"/>: <see cref="BlurTempSize"/>.
         /// </summary>
         public static void BlurRGBA(uint* px, int w, int h, float sigmaX, float sigmaY, uint* tmp)
         {
             if (sigmaX > 0.01f) BlurPass(px, w, h, 1, w, sigmaX, tmp);
             if (sigmaY > 0.01f) BlurPass(px, h, w, w, 1, sigmaY, tmp);
         }
+
+        /// <summary>Largest box for <see cref="BoxLine4"/>.</summary>
+        const int MaxBox4 = 266;
 
         /// <summary>One direction: <paramref name="lines"/> lines of <paramref name="len"/> pixels.</summary>
         static void BlurPass(uint* px, int len, int lines, int step, int lineStep, float sigma, uint* tmp)
@@ -147,7 +153,40 @@ namespace Mynell.Lottie.Raster
             int reach = sigma < 2f
                 ? math.min(math.max(1, (int)math.ceil(sigma * 3f)), 64)
                 : 3 * (BoxSize(sigma) / 2 + 1);
-            for (int l = 0; l < lines; l++)
+            int l = 0;
+            if (sigma >= 2f && BoxSize(sigma) + 1 <= MaxBox4)
+            {
+                // Four lines at once, one per lane. Each lane computes exactly what BlurLine does for its line; the
+                // common range covers the content of all four (outside it every line stays transparent).
+                uint4* t4 = (uint4*)tmp;
+                for (; l + 4 <= lines; l += 4)
+                {
+                    uint* line = px + l * lineStep;
+                    int first = 0;
+                    while (first < len && !math.any(Lanes(line + first * step, lineStep) != 0)) first++;
+                    if (first == len) continue;
+                    int last = len - 1;
+                    while (!math.any(Lanes(line + last * step, lineStep) != 0)) last--;
+                    int lo = math.max(0, first - reach), n = math.min(len, last + 1 + reach) - lo;
+                    uint* seg = line + lo * step;
+                    for (int i = 0; i < n; i++) t4[i] = Lanes(seg + i * step, lineStep);
+                    BlurLine4(t4, n, sigma, t4 + n);
+                    for (int i = 0; i < n; i++)
+                    {
+                        uint* q = seg + i * step;
+                        uint4 v = t4[i];
+                        if (lineStep == 1) *(uint4*)q = v;
+                        else
+                        {
+                            q[0] = v.x;
+                            q[lineStep] = v.y;
+                            q[2 * lineStep] = v.z;
+                            q[3 * lineStep] = v.w;
+                        }
+                    }
+                }
+            }
+            for (; l < lines; l++)
             {
                 uint* line = px + l * lineStep;
                 int first = 0;
@@ -225,6 +264,61 @@ namespace Mynell.Lottie.Raster
 
         static uint Avg(int sum, uint half, ulong m) => (uint)(((ulong)((uint)sum + half) * m) >> 32);
 
+        /// <summary>The pixel at <paramref name="p"/> of four lines <paramref name="lineStep"/> apart.</summary>
+        static uint4 Lanes(uint* p, int lineStep) =>
+            lineStep == 1 ? *(uint4*)p : new uint4(p[0], p[lineStep], p[2 * lineStep], p[3 * lineStep]);
+
+        /// <summary><see cref="BlurLine"/> (box passes) on four lines at once, one per lane.</summary>
+        static void BlurLine4(uint4* data, int n, float sigma, uint4* scratch)
+        {
+            int d = BoxSize(sigma);
+            if (d < 1) return;
+            if ((d & 1) == 1)
+            {
+                BoxLine4(data, scratch, n, d, d / 2);
+                BoxLine4(scratch, data, n, d, d / 2);
+                BoxLine4(data, scratch, n, d, d / 2);
+            }
+            else
+            {
+                BoxLine4(data, scratch, n, d, d / 2);
+                BoxLine4(scratch, data, n, d, d / 2 - 1);
+                BoxLine4(data, scratch, n, d + 1, d / 2);
+            }
+            UnsafeUtility.MemCpy(data, scratch, n * 16L);
+        }
+
+        /// <summary><see cref="BoxLine"/> on four lines at once (size up to <see cref="MaxBox4"/>).</summary>
+        static void BoxLine4(uint4* src, uint4* dst, int n, int size, int left)
+        {
+            uint4 r = 0, g = 0, b = 0, a = 0;
+            for (int k = -left; k < size - left; k++)
+            {
+                if (k < 0 || k >= n) continue;
+                uint4 p = src[k];
+                r += p & 0xFFu; g += (p >> 8) & 0xFFu; b += (p >> 16) & 0xFFu; a += p >> 24;
+            }
+            uint half = (uint)size / 2;
+            // (sum + half) / size as (x * m) >> 24 in 32 bits: exact for every window sum when size <= 266 (checked exhaustively).
+            uint m = ((1u << 24) + (uint)size - 1) / (uint)size;
+            for (int i = 0; i < n; i++)
+            {
+                dst[i] = ((r + half) * m >> 24) | (((g + half) * m >> 24) << 8) | (((b + half) * m >> 24) << 16) | (((a + half) * m >> 24) << 24);
+                int outK = i - left;
+                int inK = i - left + size;
+                if (outK >= 0 && outK < n)
+                {
+                    uint4 p = src[outK];
+                    r -= p & 0xFFu; g -= (p >> 8) & 0xFFu; b -= (p >> 16) & 0xFFu; a -= p >> 24;
+                }
+                if (inK >= 0 && inK < n)
+                {
+                    uint4 p = src[inK];
+                    r += p & 0xFFu; g += (p >> 8) & 0xFFu; b += (p >> 16) & 0xFFu; a += p >> 24;
+                }
+            }
+        }
+
         static void GaussianLine(uint* data, int n, float sigma, uint* scratch)
         {
             int radius = math.max(1, (int)math.ceil(sigma * 3f));
@@ -258,7 +352,7 @@ namespace Mynell.Lottie.Raster
 
         /// <summary>
         /// feGaussianBlur(SourceAlpha) -> feOffset -> flood colour "in" -> merge(shadow, source).
-        /// <paramref name="shadow"/> and <paramref name="tmp"/> are scratch buffers of w x h and 2 x max(w, h) pixels.
+        /// <paramref name="shadow"/> and <paramref name="tmp"/> are scratch buffers of w x h and <see cref="BlurTempSize"/> pixels.
         /// </summary>
         public static void DropShadow(in EffectOp op, uint* px, int w, int h, uint* shadow, uint* tmp)
         {

@@ -627,7 +627,7 @@ namespace Mynell.Lottie.Raster
                     case EffectOpKind.GaussianBlur:
                     {
                         int mark = R.Arena.Length;
-                        int tmpLen = 2 * math.max(s.W, s.H) + 2;
+                        int tmpLen = Effects.BlurTempSize(s.W, s.H);
                         R.Arena.ResizeUninitialized(mark + tmpLen);
                         uint* tmp = (uint*)R.Arena.GetUnsafePtr() + mark;
                         Effects.BlurRGBA(Px(s), s.W, s.H, op.Z, op.W, tmp);
@@ -637,7 +637,7 @@ namespace Mynell.Lottie.Raster
                     case EffectOpKind.DropShadow:
                     {
                         int mark = R.Arena.Length;
-                        int tmpLen = 2 * math.max(s.W, s.H) + 2;
+                        int tmpLen = Effects.BlurTempSize(s.W, s.H);
                         R.Arena.ResizeUninitialized(mark + n + tmpLen);
                         uint* shadow = (uint*)R.Arena.GetUnsafePtr() + mark;
                         Effects.DropShadow(op, Px(s), s.W, s.H, shadow, shadow + n);
@@ -716,7 +716,7 @@ namespace Mynell.Lottie.Raster
                     case EffectOpKind.StyleGlow:
                     {
                         int mark = R.Arena.Length;
-                        R.Arena.ResizeUninitialized(mark + 2 * n + 4 * math.max(s.W, s.H) + 4);
+                        R.Arena.ResizeUninitialized(mark + n + math.max(n + 4 * math.max(s.W, s.H) + 4, Effects.BlurTempSize(s.W, s.H)));
                         uint* tmp = (uint*)R.Arena.GetUnsafePtr() + mark;
                         if (op.Kind == EffectOpKind.StyleShadow) Effects.StyleShadow(op, Target(s), tmp);
                         else Effects.StyleGlow(op, Target(s), tmp);
@@ -1064,7 +1064,17 @@ namespace Mynell.Lottie.Raster
                         }
                         else
                         {
-                            for (int i = 0; i < len; i++)
+                            int i = 0;
+                            for (; i + 4 <= len; i += 4)
+                            {
+                                float4 t = shader.RadialT(fx + new float4(i, i + 1, i + 2, i + 3), py);
+                                int4 idx = (int4)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f);
+                                uint4 c = new uint4(lut[idx.x], lut[idx.y], lut[idx.z], lut[idx.w]);
+                                if (cov < 255) c = Px8.Mul(c, cov);
+                                if (fresh) *(uint4*)(p + i) = c;
+                                else *(uint4*)(p + i) = Px8.Over(c, *(uint4*)(p + i));
+                            }
+                            for (; i < len; i++)
                             {
                                 float t = shader.T(new float2(fx + i, py));
                                 uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
@@ -1521,6 +1531,18 @@ namespace Mynell.Lottie.Raster
             float b = math.dot(pd, _cd);
             float cc = math.dot(pd, pd);
             if (math.abs(_a) < 1e-9f) return b != 0 ? cc / (2f * b) : 0f;
+            return (b - math.sqrt(math.max(0f, b * b - _a * cc))) / _a;
+        }
+
+        /// <summary><see cref="T"/> of a radial gradient at four points of one row (the same arithmetic per lane).</summary>
+        public float4 RadialT(float4 x, float y)
+        {
+            float4 px = _toPaint.a * x + _toPaint.c * y + _toPaint.tx;
+            float4 py = _toPaint.b * x + _toPaint.d * y + _toPaint.ty;
+            float4 dx = px - _focal.x, dy = py - _focal.y;
+            float4 b = dx * _cd.x + dy * _cd.y;
+            float4 cc = dx * dx + dy * dy;
+            if (math.abs(_a) < 1e-9f) return math.select(0f, cc / (2f * b), b != 0);
             return (b - math.sqrt(math.max(0f, b * b - _a * cc))) / _a;
         }
 
