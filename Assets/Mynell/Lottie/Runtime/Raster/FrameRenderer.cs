@@ -778,7 +778,8 @@ namespace Mynell.Lottie.Raster
             // Matte factor: a channel (alpha, red, green, blue) or the luma, optionally inverted.
             bool luma = matteMode == 3 || matteMode == 4;
             int shift = matteMode <= 2 ? 24 : matteMode <= 6 ? 0 : matteMode <= 8 ? 8 : 16;
-            bool invert = (matteMode & 1) == 0;
+            // 255 - f == f ^ 255 for f in 0..255
+            uint invert = (matteMode & 1) == 0 ? 255u : 0u;
             bool hasMatte = mp != null && matteMode >= 1 && matteMode <= 10;
 
             for (int y = rect.y; y < rect.w; y++)
@@ -825,7 +826,7 @@ namespace Mynell.Lottie.Raster
                             {
                                 uint4 m = *(uint4*)(mrow + x);
                                 uint4 f = !math.any(m != 0) ? 0u : luma ? Px8.Luma(m) : (m >> shift) & 0xFFu;
-                                k = Px8.Mul8(k, invert ? 255u - f : f);
+                                k = Px8.Mul8(k, f ^ invert);
                             }
                             // k == 0 keeps the destination, k == 255 the source pixel, opaque source replaces it.
                             if (!math.any(k != 0)) continue;
@@ -995,13 +996,21 @@ namespace Mynell.Lottie.Raster
             bool gradient = !shader.IsSolid && !shader.IsImage;
             uint* lut = stackalloc uint[gradient ? PaintShader.LutSize : 1];
             if (gradient) shader.BuildLut(lut);
+            int rowStart = target.X0 - box.x, rowEnd = target.X0 + target.W - box.x;
             for (int y = 0; y < h; y++)
             {
                 int n = ras.Sweep(y, evenOdd, spans, MinCoverage);
                 int dy = box.y + y;
                 uint* row = px + (dy - target.Y0) * target.W + (box.x - target.X0);
+                if (Stats != null) CountSpans(spans, n, shader.IsSolid ? solid : 0u, shader.IsSolid);
+                if (shader.IsSolid)
+                {
+                    int cleared = SolidSpans(row, spans, n, solid, fresh, rowStart, rowEnd);
+                    if (Stats != null) Stats[2] += cleared;
+                    continue;
+                }
                 // Fresh surface: pixels of the row before this (box-relative) x are written.
-                int done = target.X0 - box.x;
+                int done = rowStart;
                 for (int k = 0; k < n; k++)
                 {
                     CoverageSpan sp = spans[k];
@@ -1009,85 +1018,118 @@ namespace Mynell.Lottie.Raster
                     if (cov == 0) continue;
                     int len = sp.X1 - sp.X0;
                     uint* p = row + sp.X0;
-                    if (Stats != null) Stats[0] += len;
-                    if (shader.IsSolid)
+                    if (fresh)
                     {
-                        uint c = cov >= 255 ? solid : Px8.Mul(solid, cov);
-                        if (c == 0) continue;
-                        if (fresh)
+                        ClearPixels(row + done, sp.X0 - done);
+                        done = sp.X1;
+                    }
+                    float py = dy + 0.5f;
+                    float fx = box.x + sp.X0 + 0.5f;
+                    if (shader.IsImage)
+                    {
+                        for (int i = 0; i < len; i++)
                         {
-                            ClearPixels(row + done, sp.X0 - done);
-                            done = sp.X1;
+                            uint c = shader.SampleImage(new float2(fx + i, py));
+                            if (cov < 255) c = Px8.Mul(c, cov);
+                            if (fresh) p[i] = c;
+                            else if (c != 0) p[i] = Px8.Over(c, p[i]);
                         }
-                        if (fresh || (c >> 24) == 255)
+                    }
+                    else if (shader.IsLinear)
+                    {
+                        float t = shader.T(new float2(fx, py));
+                        float dt = shader.LinearStepX;
+                        for (int i = 0; i < len; i++, t += dt)
                         {
-                            if (Stats != null) Stats[6] += len;
-                            for (int i = 0; i < len; i++) p[i] = c;
-                        }
-                        else
-                        {
-                            uint inv = 255 - (c >> 24);
-                            for (int i = 0; i < len; i++) p[i] = c + Px8.Mul(p[i], inv);
+                            uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
+                            if (cov < 255) c = Px8.Mul(c, cov);
+                            if (fresh) p[i] = c;
+                            else if (c != 0) p[i] = Px8.Over(c, p[i]);
                         }
                     }
                     else
                     {
-                        if (fresh)
+                        int i = 0;
+                        for (; i + 4 <= len; i += 4)
                         {
-                            ClearPixels(row + done, sp.X0 - done);
-                            done = sp.X1;
+                            float4 t = shader.RadialT(fx + new float4(i, i + 1, i + 2, i + 3), py);
+                            int4 idx = (int4)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f);
+                            uint4 c = new uint4(lut[idx.x], lut[idx.y], lut[idx.z], lut[idx.w]);
+                            if (cov < 255) c = Px8.Mul(c, cov);
+                            if (fresh) *(uint4*)(p + i) = c;
+                            else *(uint4*)(p + i) = Px8.Over(c, *(uint4*)(p + i));
                         }
-                        if (Stats != null) Stats[5] += len;
-                        float py = dy + 0.5f;
-                        float fx = box.x + sp.X0 + 0.5f;
-                        if (shader.IsImage)
+                        for (; i < len; i++)
                         {
-                            for (int i = 0; i < len; i++)
-                            {
-                                uint c = shader.SampleImage(new float2(fx + i, py));
-                                if (cov < 255) c = Px8.Mul(c, cov);
-                                if (fresh) p[i] = c;
-                                else if (c != 0) p[i] = Px8.Over(c, p[i]);
-                            }
-                        }
-                        else if (shader.IsLinear)
-                        {
-                            float t = shader.T(new float2(fx, py));
-                            float dt = shader.LinearStepX;
-                            for (int i = 0; i < len; i++, t += dt)
-                            {
-                                uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
-                                if (cov < 255) c = Px8.Mul(c, cov);
-                                if (fresh) p[i] = c;
-                                else if (c != 0) p[i] = Px8.Over(c, p[i]);
-                            }
-                        }
-                        else
-                        {
-                            int i = 0;
-                            for (; i + 4 <= len; i += 4)
-                            {
-                                float4 t = shader.RadialT(fx + new float4(i, i + 1, i + 2, i + 3), py);
-                                int4 idx = (int4)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f);
-                                uint4 c = new uint4(lut[idx.x], lut[idx.y], lut[idx.z], lut[idx.w]);
-                                if (cov < 255) c = Px8.Mul(c, cov);
-                                if (fresh) *(uint4*)(p + i) = c;
-                                else *(uint4*)(p + i) = Px8.Over(c, *(uint4*)(p + i));
-                            }
-                            for (; i < len; i++)
-                            {
-                                float t = shader.T(new float2(fx + i, py));
-                                uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
-                                if (cov < 255) c = Px8.Mul(c, cov);
-                                if (fresh) p[i] = c;
-                                else if (c != 0) p[i] = Px8.Over(c, p[i]);
-                            }
+                            float t = shader.T(new float2(fx + i, py));
+                            uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
+                            if (cov < 255) c = Px8.Mul(c, cov);
+                            if (fresh) p[i] = c;
+                            else if (c != 0) p[i] = Px8.Over(c, p[i]);
                         }
                     }
                 }
-                if (fresh) ClearPixels(row + done, target.X0 + target.W - box.x - done);
+                if (fresh) ClearPixels(row + done, rowEnd - done);
             }
             return true;
+        }
+
+        /// <summary>
+        /// One row of solid-colour spans (a fresh row is painted onto transparent black and its gaps between
+        /// <paramref name="rowStart"/> and <paramref name="rowEnd"/> cleared). Returns the number of cleared pixels.
+        /// </summary>
+        static int SolidSpans(uint* row, CoverageSpan* spans, int n, uint solid, bool fresh, int rowStart, int rowEnd)
+        {
+            int done = rowStart, cleared = 0;
+            for (int k = 0; k < n; k++)
+            {
+                CoverageSpan sp = spans[k];
+                uint cov = (uint)(sp.Cov * 255f + 0.5f);
+                if (cov == 0) continue;
+                uint c = cov >= 255 ? solid : Px8.Mul(solid, cov);
+                if (c == 0) continue;
+                int len = sp.X1 - sp.X0;
+                uint* p = row + sp.X0;
+                if (fresh)
+                {
+                    if (sp.X0 > done)
+                    {
+                        UnsafeUtility.MemClear(row + done, (long)(sp.X0 - done) * 4);
+                        cleared += sp.X0 - done;
+                    }
+                    done = sp.X1;
+                }
+                if (fresh || (c >> 24) == 255)
+                {
+                    for (int i = 0; i < len; i++) p[i] = c;
+                }
+                else
+                {
+                    uint inv = 255 - (c >> 24);
+                    for (int i = 0; i < len; i++) p[i] = c + Px8.Mul(p[i], inv);
+                }
+            }
+            if (fresh && rowEnd > done)
+            {
+                UnsafeUtility.MemClear(row + done, (long)(rowEnd - done) * 4);
+                cleared += rowEnd - done;
+            }
+            return cleared;
+        }
+
+        /// <summary>Debug counters of one row of spans (see <see cref="Stats"/>).</summary>
+        void CountSpans(CoverageSpan* spans, int n, uint solid, bool isSolid)
+        {
+            for (int k = 0; k < n; k++)
+            {
+                CoverageSpan sp = spans[k];
+                uint cov = (uint)(sp.Cov * 255f + 0.5f);
+                if (cov == 0) continue;
+                int len = sp.X1 - sp.X0;
+                Stats[0] += len;
+                if (!isSolid) Stats[5] += len;
+                else if ((cov >= 255 ? solid : Px8.Mul(solid, cov)) >> 24 == 255) Stats[6] += len;
+            }
         }
 
         void ClearPixels(uint* p, long count)

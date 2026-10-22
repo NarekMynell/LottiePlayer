@@ -111,7 +111,20 @@ namespace Mynell.Lottie.Raster
             Line(x0, y0, x1, y1);
         }
 
-        void Touch(ulong* bits, int x) => bits[x >> 6] |= 1UL << (x & 63);
+        /// <summary>Flags cells <paramref name="a"/>..<paramref name="b"/> (inclusive).</summary>
+        static void Touch(ulong* bits, int a, int b)
+        {
+            int wa = a >> 6, wb = b >> 6;
+            ulong ma = ~0UL << (a & 63), mb = ~0UL >> (63 - (b & 63));
+            if (wa == wb)
+            {
+                bits[wa] |= ma & mb;
+                return;
+            }
+            bits[wa] |= ma;
+            for (int w = wa + 1; w < wb; w++) bits[w] = ~0UL;
+            bits[wb] |= mb;
+        }
 
         void Line(float x0, float y0, float x1, float y1)
         {
@@ -128,6 +141,11 @@ namespace Mynell.Lottie.Raster
             int yStart = math.max(0, (int)y0);
             int yEnd = math.min(H, (int)math.ceil(y1));
             float wMax = W;
+            // Fields in locals (the cell stores could alias this struct, so they would be reloaded every row).
+            float* acc = Acc;
+            ulong* allBits = Bits;
+            int* rowMin = RowMin, rowMax = RowMax;
+            int stride = Stride, wordStride = WordStride;
             for (int y = yStart; y < yEnd; y++)
             {
                 float dy = math.min(y + 1f, y1) - math.max((float)y, y0);
@@ -140,15 +158,13 @@ namespace Mynell.Lottie.Raster
                 int xai = (int)xaFloor;
                 float xbCeil = math.ceil(xb);
                 int xbi = (int)xbCeil;
-                float* row = Acc + y * Stride;
-                ulong* bits = Bits + y * WordStride;
+                float* row = acc + y * stride;
+                ulong* bits = allBits + y * wordStride;
                 if (xbi <= xai + 1)
                 {
                     float xmf = 0.5f * (xa + xb) - xaFloor;
                     row[xai] += d - d * xmf;
                     row[xai + 1] += d * xmf;
-                    Touch(bits, xai);
-                    Touch(bits, xai + 1);
                     xbi = xai + 1;
                 }
                 else
@@ -159,32 +175,24 @@ namespace Mynell.Lottie.Raster
                     float x1f = xb - xbCeil + 1f;
                     float am = 0.5f * s * x1f * x1f;
                     row[xai] += d * a0;
-                    Touch(bits, xai);
                     if (xbi == xai + 2)
                     {
                         row[xai + 1] += d * (1f - a0 - am);
-                        Touch(bits, xai + 1);
                     }
                     else
                     {
                         float a1 = s * (1.5f - x0f);
                         row[xai + 1] += d * (a1 - a0);
-                        Touch(bits, xai + 1);
                         float ds = d * s;
-                        for (int xi = xai + 2; xi < xbi - 1; xi++)
-                        {
-                            row[xi] += ds;
-                            Touch(bits, xi);
-                        }
+                        for (int xi = xai + 2; xi < xbi - 1; xi++) row[xi] += ds;
                         float a2 = a1 + (xbi - xai - 3) * s;
                         row[xbi - 1] += d * (1f - a2 - am);
-                        Touch(bits, xbi - 1);
                     }
                     row[xbi] += d * am;
-                    Touch(bits, xbi);
                 }
-                if (xai < RowMin[y]) RowMin[y] = xai;
-                if (xbi > RowMax[y]) RowMax[y] = xbi;
+                Touch(bits, xai, xbi);
+                if (xai < rowMin[y]) rowMin[y] = xai;
+                if (xbi > rowMax[y]) rowMax[y] = xbi;
                 x = xnext;
             }
         }
@@ -212,7 +220,7 @@ namespace Mynell.Lottie.Raster
             int mn = RowMin[y];
             float* row = Acc + y * Stride;
             ulong* bits = Bits + y * WordStride;
-            int n = 0;
+            int n = 0, width = W;
             float s = 0;
             int prevEnd = mn;
             int w0 = mn >> 6, w1 = mx >> 6;
@@ -225,18 +233,18 @@ namespace Mynell.Lottie.Raster
                 {
                     int x = (wi << 6) + math.tzcnt(word);
                     word &= word - 1;
-                    if (x >= W)
+                    if (x >= width)
                     {
                         // Cells past the last pixel only close the row; flush the interior run first.
-                        if (prevEnd < W)
+                        if (prevEnd < width)
                         {
                             float c = Rule(s, evenOdd);
                             if (c >= minCoverage)
                             {
-                                if (n > 0 && spans[n - 1].X1 == prevEnd && spans[n - 1].Cov == c) spans[n - 1].X1 = W;
-                                else spans[n++] = new CoverageSpan { X0 = prevEnd, X1 = W, Cov = c };
+                                if (n > 0 && spans[n - 1].X1 == prevEnd && spans[n - 1].Cov == c) spans[n - 1].X1 = width;
+                                else spans[n++] = new CoverageSpan { X0 = prevEnd, X1 = width, Cov = c };
                             }
-                            prevEnd = W;
+                            prevEnd = width;
                         }
                         row[x] = 0;
                         continue;
