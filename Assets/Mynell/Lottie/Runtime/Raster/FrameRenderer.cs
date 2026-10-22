@@ -87,6 +87,8 @@ namespace Mynell.Lottie.Raster
             public int Offset;     // arena offset (pixels or mask bytes); -1 = root target
             public int X0, Y0, W, H;
             public byte IsMask;
+            /// <summary>Pixels not cleared yet: the first item drawn clears them (or <see cref="EnsureCleared"/>).</summary>
+            public byte Uncleared;
             public int4 Rect => new int4(X0, Y0, X0 + W, Y0 + H);
         }
 
@@ -149,7 +151,6 @@ namespace Mynell.Lottie.Raster
             BandY0 = math.clamp(y0, 0, RootH);
             BandY1 = math.clamp(y1, BandY0, RootH);
             if (BandY1 <= BandY0) return;
-            UnsafeUtility.MemClear(RootPx + (long)BandY0 * RootW, (long)RootW * (BandY1 - BandY0) * 4);
             Execute();
         }
 
@@ -451,8 +452,7 @@ namespace Mynell.Lottie.Raster
             {
                 s.Offset = R.Arena.Length;
                 R.Arena.ResizeUninitialized(s.Offset + w * h);
-                UnsafeUtility.MemClear((uint*)R.Arena.GetUnsafePtr() + s.Offset, (long)w * h * 4);
-                if (Stats != null) Stats[2] += (long)w * h;
+                s.Uncleared = 1;
             }
             R.Surfaces.Add(s);
             return R.Surfaces.Length - 1;
@@ -476,7 +476,7 @@ namespace Mynell.Lottie.Raster
             R.MaskArena.Clear();
             R.Surfaces.Clear();
             R.Stack.Clear();
-            R.Surfaces.Add(new Surface { Offset = -1, X0 = 0, Y0 = BandY0, W = RootW, H = BandY1 - BandY0 });
+            R.Surfaces.Add(new Surface { Offset = -1, X0 = 0, Y0 = BandY0, W = RootW, H = BandY1 - BandY0, Uncleared = 1 });
             R.Stack.Add(new StackEntry { Group = -1, Layer = 0, Matte = -1, Mask = -1, Aux = -1 });
             _mergeOffset = -1;
 
@@ -493,7 +493,11 @@ namespace Mynell.Lottie.Raster
                         DrawItem item = F.Items[cmd.Index];
                         Surface s = R.Surfaces[target];
                         if (s.IsMask != 0) DrawMaskItem(cmd.Index, item, s);
-                        else DrawItemInto(cmd.Index, item, s);
+                        else if (DrawItemInto(cmd.Index, item, s, s.Uncleared != 0) && s.Uncleared != 0)
+                        {
+                            s.Uncleared = 0;
+                            R.Surfaces[target] = s;
+                        }
                         break;
                     }
                     case CmdKind.BeginGroup:
@@ -587,6 +591,7 @@ namespace Mynell.Lottie.Raster
                     }
                 }
             }
+            EnsureCleared(0);
         }
 
         int SkipGroup(int c, int g)
@@ -742,6 +747,12 @@ namespace Mynell.Lottie.Raster
         void CompositeGroup(in StackEntry e, int dstIndex)
         {
             GroupData gd = F.Groups[e.Group];
+            // Nothing painted: compositing transparent pixels changes nothing (effects may still create content).
+            if (R.Surfaces[e.Layer].Uncleared != 0 && gd.EffectCount == 0) return;
+            EnsureCleared(e.Layer);
+            if (e.Matte >= 0) EnsureCleared(e.Matte);
+            if (e.Aux >= 0) EnsureCleared(e.Aux);
+            EnsureCleared(dstIndex);
             bool maskBaked = gd.EffectCount > 0 && ApplyEffects(gd, e);
             if (gd.Projected != 0)
             {
@@ -788,7 +799,9 @@ namespace Mynell.Lottie.Raster
                             for (; x + 4 <= rect.z; x += 4)
                             {
                                 uint4 sv = *(uint4*)(srow + x);
-                                if (math.any(sv != 0)) *(uint4*)(drow + x) = Px8.Over(sv, *(uint4*)(drow + x));
+                                // Over(s, d) == s when every alpha is 255.
+                                if (math.all(sv >= 0xFF000000u)) *(uint4*)(drow + x) = sv;
+                                else if (math.any(sv != 0)) *(uint4*)(drow + x) = Px8.Over(sv, *(uint4*)(drow + x));
                             }
                         }
                         else
@@ -811,10 +824,14 @@ namespace Mynell.Lottie.Raster
                             if (hasMatte)
                             {
                                 uint4 m = *(uint4*)(mrow + x);
-                                uint4 f = luma ? Px8.Luma(m) : (m >> shift) & 0xFFu;
+                                uint4 f = !math.any(m != 0) ? 0u : luma ? Px8.Luma(m) : (m >> shift) & 0xFFu;
                                 k = Px8.Mul8(k, invert ? 255u - f : f);
                             }
-                            *(uint4*)(drow + x) = Px8.Over(Px8.Mul(sv, k), *(uint4*)(drow + x));
+                            // k == 0 keeps the destination, k == 255 the source pixel, opaque source replaces it.
+                            if (!math.any(k != 0)) continue;
+                            uint4 s = math.all(k == 255u) ? sv : Px8.Mul(sv, k);
+                            if (math.all(s >= 0xFF000000u)) *(uint4*)(drow + x) = s;
+                            else *(uint4*)(drow + x) = Px8.Over(s, *(uint4*)(drow + x));
                         }
                     }
                     for (; x < rect.z; x++)
@@ -948,9 +965,14 @@ namespace Mynell.Lottie.Raster
             return true;
         }
 
-        void DrawItemInto(int itemIndex, in DrawItem item, in Surface target)
+        /// <summary>
+        /// Paints an item into a surface. A <paramref name="fresh"/> surface has not been cleared yet: the item is
+        /// painted onto transparent black (Over(c, 0) == c) and every pixel it does not paint is cleared, so the
+        /// surface is written once. Returns false when nothing was written (a fresh surface stays uncleared).
+        /// </summary>
+        bool DrawItemInto(int itemIndex, in DrawItem item, in Surface target, bool fresh)
         {
-            if (!PrepareCoverage(itemIndex, item, target.Rect, out int4 box, out CoverageRasterizer ras)) return;
+            if (!PrepareCoverage(itemIndex, item, target.Rect, out int4 box, out CoverageRasterizer ras)) return false;
             PaintData paint = F.Paints[item.Paint];
             var shader = PaintShader.Create(paint, F.PaintFloats, ImagePixels, ImageInfo, ImageCount);
             if (Stats != null) Stats[4]++;
@@ -960,9 +982,15 @@ namespace Mynell.Lottie.Raster
             if (shader.Transparent)
             {
                 for (int y = 0; y < h; y++) ras.Sweep(y, evenOdd, spans, MinCoverage);
-                return;
+                return false;
             }
             uint* px = Px(target);
+            if (fresh)
+            {
+                // Rows above and below the item.
+                ClearPixels(px, (long)(box.y - target.Y0) * target.W);
+                ClearPixels(px + (long)(box.w - target.Y0) * target.W, (long)(target.Y0 + target.H - box.w) * target.W);
+            }
             uint solid = shader.IsSolid ? Px8.Pack(shader.Solid) : 0;
             bool gradient = !shader.IsSolid && !shader.IsImage;
             uint* lut = stackalloc uint[gradient ? PaintShader.LutSize : 1];
@@ -970,9 +998,10 @@ namespace Mynell.Lottie.Raster
             for (int y = 0; y < h; y++)
             {
                 int n = ras.Sweep(y, evenOdd, spans, MinCoverage);
-                if (n == 0) continue;
                 int dy = box.y + y;
                 uint* row = px + (dy - target.Y0) * target.W + (box.x - target.X0);
+                // Fresh surface: pixels of the row before this (box-relative) x are written.
+                int done = target.X0 - box.x;
                 for (int k = 0; k < n; k++)
                 {
                     CoverageSpan sp = spans[k];
@@ -985,7 +1014,12 @@ namespace Mynell.Lottie.Raster
                     {
                         uint c = cov >= 255 ? solid : Px8.Mul(solid, cov);
                         if (c == 0) continue;
-                        if ((c >> 24) == 255)
+                        if (fresh)
+                        {
+                            ClearPixels(row + done, sp.X0 - done);
+                            done = sp.X1;
+                        }
+                        if (fresh || (c >> 24) == 255)
                         {
                             if (Stats != null) Stats[6] += len;
                             for (int i = 0; i < len; i++) p[i] = c;
@@ -998,6 +1032,11 @@ namespace Mynell.Lottie.Raster
                     }
                     else
                     {
+                        if (fresh)
+                        {
+                            ClearPixels(row + done, sp.X0 - done);
+                            done = sp.X1;
+                        }
                         if (Stats != null) Stats[5] += len;
                         float py = dy + 0.5f;
                         float fx = box.x + sp.X0 + 0.5f;
@@ -1007,7 +1046,8 @@ namespace Mynell.Lottie.Raster
                             {
                                 uint c = shader.SampleImage(new float2(fx + i, py));
                                 if (cov < 255) c = Px8.Mul(c, cov);
-                                if (c != 0) p[i] = Px8.Over(c, p[i]);
+                                if (fresh) p[i] = c;
+                                else if (c != 0) p[i] = Px8.Over(c, p[i]);
                             }
                         }
                         else if (shader.IsLinear)
@@ -1018,7 +1058,8 @@ namespace Mynell.Lottie.Raster
                             {
                                 uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
                                 if (cov < 255) c = Px8.Mul(c, cov);
-                                if (c != 0) p[i] = Px8.Over(c, p[i]);
+                                if (fresh) p[i] = c;
+                                else if (c != 0) p[i] = Px8.Over(c, p[i]);
                             }
                         }
                         else
@@ -1028,12 +1069,32 @@ namespace Mynell.Lottie.Raster
                                 float t = shader.T(new float2(fx + i, py));
                                 uint c = lut[(int)(math.saturate(t) * (PaintShader.LutSize - 1) + 0.5f)];
                                 if (cov < 255) c = Px8.Mul(c, cov);
-                                if (c != 0) p[i] = Px8.Over(c, p[i]);
+                                if (fresh) p[i] = c;
+                                else if (c != 0) p[i] = Px8.Over(c, p[i]);
                             }
                         }
                     }
                 }
+                if (fresh) ClearPixels(row + done, target.X0 + target.W - box.x - done);
             }
+            return true;
+        }
+
+        void ClearPixels(uint* p, long count)
+        {
+            if (count <= 0) return;
+            UnsafeUtility.MemClear(p, count * 4);
+            if (Stats != null) Stats[2] += count;
+        }
+
+        /// <summary>Clears a surface nothing has been painted into yet (see <see cref="DrawItemInto"/>).</summary>
+        void EnsureCleared(int index)
+        {
+            Surface s = R.Surfaces[index];
+            if (s.Uncleared == 0) return;
+            ClearPixels(Px(s), (long)s.W * s.H);
+            s.Uncleared = 0;
+            R.Surfaces[index] = s;
         }
 
         // ------------------------------------------------------------------ masks
