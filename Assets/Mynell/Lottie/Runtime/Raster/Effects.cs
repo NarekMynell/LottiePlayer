@@ -43,10 +43,13 @@ namespace Mynell.Lottie.Raster
         {
             // lottie-web greys through linearRGB: gray = toSRGB(mean(toLinear(r, g, b))).
             float* toLin = stackalloc float[256];
-            for (int i = 0; i < 256; i++) toLin[i] = SrgbToLinear(i / 255f);
             const int EncSize = 4096;
             float* toSrgb = stackalloc float[EncSize + 1];
-            for (int i = 0; i <= EncSize; i++) toSrgb[i] = LinearToSrgb(i / (float)EncSize);
+            if (op.Kind == EffectOpKind.Tint || op.Kind == EffectOpKind.Tritone)
+            {
+                for (int i = 0; i < 256; i++) toLin[i] = SrgbToLinear(i / 255f);
+                for (int i = 0; i <= EncSize; i++) toSrgb[i] = LinearToSrgb(i / (float)EncSize);
+            }
 
             float* tr = op.TableR >= 0 ? paintFloats + op.TableR : null;
             float* tg = op.TableG >= 0 ? paintFloats + op.TableG : null;
@@ -54,9 +57,17 @@ namespace Mynell.Lottie.Raster
             float* ta = op.TableA >= 0 ? paintFloats + op.TableA : null;
             float* trgb = op.TableRGB >= 0 ? paintFloats + op.TableRGB : null;
 
+            // The result depends on the pixel only: runs of equal pixels reuse the previous result.
+            uint lastIn = 0, lastOut = 0;
+            bool haveLast = false;
             for (int i = 0; i < count; i++)
             {
                 uint p = px[i];
+                if (haveLast && p == lastIn)
+                {
+                    px[i] = lastOut;
+                    continue;
+                }
                 uint a8 = p >> 24;
                 if (a8 == 0 && op.Kind != EffectOpKind.Levels) continue;
                 float a = a8 * Blend.Inv255;
@@ -94,7 +105,10 @@ namespace Mynell.Lottie.Raster
                     }
                 }
                 a = math.saturate(a);
-                px[i] = Px8.Pack(new float4(math.saturate(c) * a, a));
+                lastIn = p;
+                lastOut = Px8.Pack(new float4(math.saturate(c) * a, a));
+                haveLast = true;
+                px[i] = lastOut;
             }
         }
 

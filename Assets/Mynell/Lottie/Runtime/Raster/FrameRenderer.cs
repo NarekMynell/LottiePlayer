@@ -766,6 +766,11 @@ namespace Mynell.Lottie.Raster
             uint* mp = e.Matte >= 0 ? Px(matte) : null;
             byte* kp = e.Mask >= 0 && !maskBaked ? MaskPx(mask) : null;
             if (Stats != null) Stats[1] += (long)(rect.z - rect.x) * (rect.w - rect.y);
+            // Matte factor: a channel (alpha, red, green, blue) or the luma, optionally inverted.
+            bool luma = matteMode == 3 || matteMode == 4;
+            int shift = matteMode <= 2 ? 24 : matteMode <= 6 ? 0 : matteMode <= 8 ? 8 : 16;
+            bool invert = (matteMode & 1) == 0;
+            bool hasMatte = mp != null && matteMode >= 1 && matteMode <= 10;
 
             for (int y = rect.y; y < rect.w; y++)
             {
@@ -773,23 +778,56 @@ namespace Mynell.Lottie.Raster
                 uint* drow = dp + (y - dst.Y0) * dst.W - dst.X0;
                 uint* mrow = mp != null ? mp + (y - matte.Y0) * matte.W - matte.X0 : null;
                 byte* krow = kp != null ? kp + (y - mask.Y0) * mask.W - mask.X0 : null;
-                if (mode == 0 && mrow == null && krow == null)
+                if (mode == 0)
                 {
-                    if (op8 == 255)
+                    // Branch-free per pixel: Mul(s, 255) == s, Mul(s, 0) == 0 and Over(0, d) == d, so this matches the
+                    // scalar loop below bit for bit; blocks of four transparent source pixels are skipped.
+                    int x = rect.x;
+                    if (mrow == null && krow == null)
                     {
-                        for (int x = rect.x; x < rect.z; x++)
+                        if (op8 == 255)
                         {
-                            uint sv = srow[x];
-                            if (sv != 0) drow[x] = Px8.Over(sv, drow[x]);
+                            for (; x + 4 <= rect.z; x += 4)
+                            {
+                                uint4 sv = *(uint4*)(srow + x);
+                                if (math.any(sv != 0)) *(uint4*)(drow + x) = Px8.Over(sv, *(uint4*)(drow + x));
+                            }
+                        }
+                        else
+                        {
+                            for (; x + 4 <= rect.z; x += 4)
+                            {
+                                uint4 sv = *(uint4*)(srow + x);
+                                if (math.any(sv != 0)) *(uint4*)(drow + x) = Px8.Over(Px8.Mul(sv, op8), *(uint4*)(drow + x));
+                            }
                         }
                     }
                     else
                     {
-                        for (int x = rect.x; x < rect.z; x++)
+                        for (; x + 4 <= rect.z; x += 4)
                         {
-                            uint sv = srow[x];
-                            if (sv != 0) drow[x] = Px8.Over(Px8.Mul(sv, op8), drow[x]);
+                            uint4 sv = *(uint4*)(srow + x);
+                            if (!math.any(sv != 0)) continue;
+                            uint4 k = op8;
+                            if (krow != null) k = Px8.Mul8(k, Px8.Bytes(krow + x));
+                            if (hasMatte)
+                            {
+                                uint4 m = *(uint4*)(mrow + x);
+                                uint4 f = luma ? Px8.Luma(m) : (m >> shift) & 0xFFu;
+                                k = Px8.Mul8(k, invert ? 255u - f : f);
+                            }
+                            *(uint4*)(drow + x) = Px8.Over(Px8.Mul(sv, k), *(uint4*)(drow + x));
                         }
+                    }
+                    for (; x < rect.z; x++)
+                    {
+                        uint sv = srow[x];
+                        if (sv == 0) continue;
+                        uint k = op8;
+                        if (krow != null) k = Px8.Mul8(k, krow[x]);
+                        if (mrow != null && k != 0) k = Px8.Mul8(k, MatteFactor8(matteMode, mrow[x]));
+                        if (k == 0) continue;
+                        drow[x] = Px8.Over(k == 255 ? sv : Px8.Mul(sv, k), drow[x]);
                     }
                     continue;
                 }
@@ -952,7 +990,7 @@ namespace Mynell.Lottie.Raster
                         if ((c >> 24) == 255)
                         {
                             if (Stats != null) Stats[6] += len;
-                            UnsafeUtility.MemCpyReplicate(p, &c, 4, len);
+                            for (int i = 0; i < len; i++) p[i] = c;
                         }
                         else
                         {
@@ -1140,7 +1178,7 @@ namespace Mynell.Lottie.Raster
     }
 
     /// <summary>Packed premultiplied RGBA8 arithmetic (SWAR, exact rounding of x/255).</summary>
-    public static class Px8
+    public static unsafe class Px8
     {
         /// <summary>Multiplies all four channels by a/255 (a in 0..255).</summary>
         public static uint Mul(uint p, uint a)
@@ -1160,6 +1198,33 @@ namespace Mynell.Lottie.Raster
         }
 
         public static uint Over(uint s, uint d) => s + Mul(d, 255 - (s >> 24));
+
+        /// <summary><see cref="Mul(uint, uint)"/> on four pixels.</summary>
+        public static uint4 Mul(uint4 p, uint4 a)
+        {
+            uint4 rb = (p & 0x00FF00FFu) * a + 0x00800080u;
+            rb = ((rb + ((rb >> 8) & 0x00FF00FFu)) >> 8) & 0x00FF00FFu;
+            uint4 ga = ((p >> 8) & 0x00FF00FFu) * a + 0x00800080u;
+            ga = (ga + ((ga >> 8) & 0x00FF00FFu)) & 0xFF00FF00u;
+            return rb | ga;
+        }
+
+        public static uint4 Mul8(uint4 a, uint4 b)
+        {
+            uint4 t = a * b + 128u;
+            return (t + (t >> 8)) >> 8;
+        }
+
+        public static uint4 Over(uint4 s, uint4 d) => s + Mul(d, 255u - (s >> 24));
+
+        public static uint4 Luma(uint4 p) => ((p & 0xFF) * 54u + ((p >> 8) & 0xFF) * 183u + ((p >> 16) & 0xFF) * 19u + 128u) >> 8;
+
+        /// <summary>Four bytes widened to four lanes.</summary>
+        public static uint4 Bytes(byte* p)
+        {
+            uint w = *(uint*)p;
+            return new uint4(w, w >> 8, w >> 16, w >> 24) & 0xFFu;
+        }
 
         public static uint Pack(float4 c)
         {
