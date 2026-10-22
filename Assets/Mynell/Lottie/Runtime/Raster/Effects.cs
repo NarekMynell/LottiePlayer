@@ -142,18 +142,28 @@ namespace Mynell.Lottie.Raster
         /// <summary>One direction: <paramref name="lines"/> lines of <paramref name="len"/> pixels.</summary>
         static void BlurPass(uint* px, int len, int lines, int step, int lineStep, float sigma, uint* tmp)
         {
+            // Pixels further than the blur reach from the content stay transparent, so each line is blurred over its
+            // content range grown by the reach (three boxes of at most d + 1, or the Gaussian kernel radius).
+            int reach = sigma < 2f
+                ? math.min(math.max(1, (int)math.ceil(sigma * 3f)), 64)
+                : 3 * (BoxSize(sigma) / 2 + 1);
             for (int l = 0; l < lines; l++)
             {
                 uint* line = px + l * lineStep;
-                // Skip empty lines quickly.
-                bool any = false;
-                for (int i = 0; i < len && !any; i++) any = line[i * step] != 0;
-                if (!any) continue;
-                for (int i = 0; i < len; i++) tmp[i] = line[i * step];
-                BlurLine(tmp, len, sigma, tmp + len);
-                for (int i = 0; i < len; i++) line[i * step] = tmp[i];
+                int first = 0;
+                while (first < len && line[first * step] == 0) first++;
+                if (first == len) continue;
+                int last = len - 1;
+                while (line[last * step] == 0) last--;
+                int lo = math.max(0, first - reach), n = math.min(len, last + 1 + reach) - lo;
+                uint* seg = line + lo * step;
+                for (int i = 0; i < n; i++) tmp[i] = seg[i * step];
+                BlurLine(tmp, n, sigma, tmp + n);
+                for (int i = 0; i < n; i++) seg[i * step] = tmp[i];
             }
         }
+
+        static int BoxSize(float sigma) => (int)math.floor(sigma * 3f * math.sqrt(2f * math.PI) / 4f + 0.5f);
 
         static void BlurLine(uint* data, int n, float sigma, uint* scratch)
         {
@@ -162,52 +172,58 @@ namespace Mynell.Lottie.Raster
                 GaussianLine(data, n, sigma, scratch);
                 return;
             }
-            int d = (int)math.floor(sigma * 3f * math.sqrt(2f * math.PI) / 4f + 0.5f);
+            int d = BoxSize(sigma);
             if (d < 1) return;
             if ((d & 1) == 1)
             {
-                BoxLine(data, n, d, d / 2, scratch);
-                BoxLine(data, n, d, d / 2, scratch);
-                BoxLine(data, n, d, d / 2, scratch);
+                BoxLine(data, scratch, n, d, d / 2);
+                BoxLine(scratch, data, n, d, d / 2);
+                BoxLine(data, scratch, n, d, d / 2);
             }
             else
             {
-                BoxLine(data, n, d, d / 2, scratch);      // centred between the pixel and its left neighbour
-                BoxLine(data, n, d, d / 2 - 1, scratch);  // centred between the pixel and its right neighbour
-                BoxLine(data, n, d + 1, d / 2, scratch);  // centred on the pixel
+                BoxLine(data, scratch, n, d, d / 2);      // centred between the pixel and its left neighbour
+                BoxLine(scratch, data, n, d, d / 2 - 1);  // centred between the pixel and its right neighbour
+                BoxLine(data, scratch, n, d + 1, d / 2);  // centred on the pixel
             }
+            UnsafeUtility.MemCpy(data, scratch, n * 4L);
         }
 
-        /// <summary>Box blur: out[i] = mean(in[i - left .. i - left + size - 1]) with transparent outside.</summary>
-        static void BoxLine(uint* data, int n, int size, int left, uint* scratch)
+        /// <summary>Box blur: dst[i] = mean(src[i - left .. i - left + size - 1]) with transparent outside.</summary>
+        static void BoxLine(uint* src, uint* dst, int n, int size, int left)
         {
             int r = 0, g = 0, b = 0, a = 0;
             // window for i = 0 covers [-left, size - left - 1]
             for (int k = -left; k < size - left; k++)
             {
                 if (k < 0 || k >= n) continue;
-                uint p = data[k];
+                uint p = src[k];
                 r += (int)(p & 0xFF); g += (int)((p >> 8) & 0xFF); b += (int)((p >> 16) & 0xFF); a += (int)(p >> 24);
             }
             uint half = (uint)size / 2;
+            // (sum + half) / size as a multiply-high: exact for every window sum when size < 4096 (checked exhaustively).
+            ulong m = size < 4096 ? ((1UL << 32) + (ulong)size - 1) / (ulong)size : 0;
             for (int i = 0; i < n; i++)
             {
-                scratch[i] = (uint)((r + half) / size) | ((uint)((g + half) / size) << 8) | ((uint)((b + half) / size) << 16) | ((uint)((a + half) / size) << 24);
+                dst[i] = m != 0
+                    ? Avg(r, half, m) | (Avg(g, half, m) << 8) | (Avg(b, half, m) << 16) | (Avg(a, half, m) << 24)
+                    : (uint)((r + half) / size) | ((uint)((g + half) / size) << 8) | ((uint)((b + half) / size) << 16) | ((uint)((a + half) / size) << 24);
                 int outK = i - left;
                 int inK = i - left + size;
                 if (outK >= 0 && outK < n)
                 {
-                    uint p = data[outK];
+                    uint p = src[outK];
                     r -= (int)(p & 0xFF); g -= (int)((p >> 8) & 0xFF); b -= (int)((p >> 16) & 0xFF); a -= (int)(p >> 24);
                 }
                 if (inK >= 0 && inK < n)
                 {
-                    uint p = data[inK];
+                    uint p = src[inK];
                     r += (int)(p & 0xFF); g += (int)((p >> 8) & 0xFF); b += (int)((p >> 16) & 0xFF); a += (int)(p >> 24);
                 }
             }
-            UnsafeUtility.MemCpy(data, scratch, n * 4L);
         }
+
+        static uint Avg(int sum, uint half, ulong m) => (uint)(((ulong)((uint)sum + half) * m) >> 32);
 
         static void GaussianLine(uint* data, int n, float sigma, uint* scratch)
         {

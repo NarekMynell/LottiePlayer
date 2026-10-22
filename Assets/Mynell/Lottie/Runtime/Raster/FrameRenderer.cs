@@ -733,12 +733,10 @@ namespace Mynell.Lottie.Raster
             uint* px = Px(s);
             byte* mp = MaskPx(m);
             int n = s.W * s.H;
-            for (int i = 0; i < n; i++)
-            {
-                uint k = mp[i];
-                if (k == 255) continue;
-                px[i] = k == 0 ? 0 : Px8.Mul(px[i], k);
-            }
+            // Mul(p, 255) == p and Mul(p, 0) == 0: the same as skipping full and clearing empty mask pixels.
+            int i = 0;
+            for (; i + 4 <= n; i += 4) *(uint4*)(px + i) = Px8.Mul(*(uint4*)(px + i), Px8.Bytes(mp + i));
+            for (; i < n; i++) px[i] = Px8.Mul(px[i], mp[i]);
         }
 
         void CompositeGroup(in StackEntry e, int dstIndex)
@@ -1058,6 +1056,7 @@ namespace Mynell.Lottie.Raster
                 if (!PrepareCoverage(itemIndex, item, target.Rect, out int4 b, out CoverageRasterizer r)) return;
                 var spans = (CoverageSpan*)R.Spans.GetUnsafePtr();
                 byte* mp = MaskPx(target);
+                MaskOp direct = item.Mask;
                 int h = b.w - b.y;
                 for (int y = 0; y < h; y++)
                 {
@@ -1067,8 +1066,7 @@ namespace Mynell.Lottie.Raster
                     {
                         CoverageSpan sp = spans[k];
                         uint a = Px8.Mul8((uint)(sp.Cov * 255f + 0.5f), op8);
-                        if (a == 0) continue;
-                        for (int x = sp.X0; x < sp.X1; x++) row[x] = (byte)ApplyMaskOp(item.Mask, row[x], a);
+                        if (a != 0) MaskSpan(direct, row + sp.X0, sp.X1 - sp.X0, a);
                     }
                 }
                 return;
@@ -1094,12 +1092,7 @@ namespace Mynell.Lottie.Raster
                     {
                         CoverageSpan sp = spans[k];
                         uint a = Px8.Mul8((uint)(sp.Cov * 255f + 0.5f), op8);
-                        if (a == 0) continue;
-                        for (int x = sp.X0; x < sp.X1; x++)
-                        {
-                            uint m = row[x];
-                            row[x] = (byte)(m + Px8.Mul8(255 - m, a));
-                        }
+                        if (a != 0) MaskSpan(MaskOp.Add, row + sp.X0, sp.X1 - sp.X0, a);
                     }
                 }
             }
@@ -1107,28 +1100,69 @@ namespace Mynell.Lottie.Raster
 
             if (math.any(item.Erode > 0)) Erode(target.W, target.H, item.Erode);
             byte* temp = (byte*)R.MaskArena.GetUnsafePtr() + _mergeOffset;
-            byte* dst = MaskPx(target);
-            MaskOp op = item.Mask;
-            for (int i = 0; i < area; i++)
-            {
-                uint a = temp[i];
-                if (a == 0 && op != MaskOp.Intersect && op != MaskOp.Darken) continue;
-                dst[i] = (byte)ApplyMaskOp(op, dst[i], a);
-            }
+            ApplyMask(item.Mask, MaskPx(target), temp, area);
             R.MaskArena.ResizeUninitialized(_mergeOffset);
             _mergeOffset = -1;
         }
 
-        static uint ApplyMaskOp(MaskOp op, uint m, uint a)
+        /// <summary>Applies a mask op with constant coverage <paramref name="a"/> to a run of mask bytes.</summary>
+        static void MaskSpan(MaskOp op, byte* p, int len, uint a)
+        {
+            // Full coverage sets the mask to 255 (add, lighten) or 0 (subtract).
+            if (a == 255 && len >= 16 && (op == MaskOp.Add || op == MaskOp.Lighten || op == MaskOp.Subtract))
+            {
+                UnsafeUtility.MemSet(p, op == MaskOp.Subtract ? (byte)0 : (byte)255, len);
+                return;
+            }
+            switch (op)
+            {
+                case MaskOp.Subtract: for (int x = 0; x < len; x++) p[x] = (byte)Px8.Mul8(p[x], 255 - a); break;
+                case MaskOp.Intersect: for (int x = 0; x < len; x++) p[x] = (byte)Px8.Mul8(p[x], a); break;
+                case MaskOp.Lighten: for (int x = 0; x < len; x++) p[x] = (byte)math.max(p[x], a); break;
+                case MaskOp.Darken: for (int x = 0; x < len; x++) p[x] = (byte)math.min(p[x], a); break;
+                case MaskOp.Difference:
+                    for (int x = 0; x < len; x++)
+                    {
+                        uint m = p[x];
+                        p[x] = (byte)(m > a ? m - a : a - m);
+                    }
+                    break;
+                default:
+                    for (int x = 0; x < len; x++)
+                    {
+                        uint m = p[x];
+                        p[x] = (byte)(m + Px8.Mul8(255 - m, a));
+                    }
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Combines a coverage buffer into a mask. Zero coverage leaves the mask unchanged for add, subtract, lighten
+        /// and difference, so every op runs over the whole buffer without a test.
+        /// </summary>
+        static void ApplyMask(MaskOp op, byte* dst, byte* cov, int n)
         {
             switch (op)
             {
-                case MaskOp.Subtract: return Px8.Mul8(m, 255 - a);
-                case MaskOp.Intersect: return Px8.Mul8(m, a);
-                case MaskOp.Lighten: return math.max(m, a);
-                case MaskOp.Darken: return math.min(m, a);
-                case MaskOp.Difference: return m > a ? m - a : a - m;
-                default: return m + Px8.Mul8(255 - m, a);
+                case MaskOp.Subtract: for (int i = 0; i < n; i++) dst[i] = (byte)Px8.Mul8(dst[i], 255u - cov[i]); break;
+                case MaskOp.Intersect: for (int i = 0; i < n; i++) dst[i] = (byte)Px8.Mul8(dst[i], cov[i]); break;
+                case MaskOp.Lighten: for (int i = 0; i < n; i++) dst[i] = (byte)math.max(dst[i], (uint)cov[i]); break;
+                case MaskOp.Darken: for (int i = 0; i < n; i++) dst[i] = (byte)math.min(dst[i], (uint)cov[i]); break;
+                case MaskOp.Difference:
+                    for (int i = 0; i < n; i++)
+                    {
+                        uint m = dst[i], a = cov[i];
+                        dst[i] = (byte)(m > a ? m - a : a - m);
+                    }
+                    break;
+                default:
+                    for (int i = 0; i < n; i++)
+                    {
+                        uint m = dst[i];
+                        dst[i] = (byte)(m + Px8.Mul8(255u - m, cov[i]));
+                    }
+                    break;
             }
         }
 
