@@ -1016,6 +1016,17 @@ namespace Mynell.Lottie.Scene
             float outBlack = EffectScalar(e, first + 3, t, 0), outWhite = EffectScalar(e, first + 4, t, 1);
             if (inBlack == 0 && inWhite == 1 && gamma == 1 && outBlack == 0 && outWhite == 1) return -1;
             int offset = Out.PaintFloats.Length;
+            // The table only depends on these five values: reuse one made from the same bits in an earlier frame.
+            const int Entry = 5 + 256;
+            float* key = stackalloc float[5];
+            key[0] = inBlack; key[1] = inWhite; key[2] = gamma; key[3] = outBlack; key[4] = outWhite;
+            float* cache = (float*)S.LevelsCache.GetUnsafeReadOnlyPtr();
+            for (int c = 0; c + Entry <= S.LevelsCache.Length; c += Entry)
+            {
+                if (UnsafeUtility.MemCmp(cache + c, key, 5 * sizeof(float)) != 0) continue;
+                Out.PaintFloats.AddRange(cache + c + 5, 256);
+                return offset;
+            }
             float mn = math.min(inBlack, inWhite), mx = math.max(inBlack, inWhite);
             float outDelta = outWhite - outBlack, inDelta = inWhite - inBlack;
             for (int k = 0; k < 256; k++)
@@ -1027,6 +1038,9 @@ namespace Mynell.Lottie.Scene
                 else v = outBlack + outDelta * math.pow((perc - inBlack) / inDelta, 1f / gamma);
                 Out.PaintFloats.Add(v);
             }
+            if (S.LevelsCache.Length >= 64 * Entry) S.LevelsCache.Clear();
+            S.LevelsCache.AddRange(key, 5);
+            S.LevelsCache.AddRange((float*)Out.PaintFloats.GetUnsafeReadOnlyPtr() + offset, 256);
             return offset;
         }
     }

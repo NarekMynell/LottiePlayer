@@ -18,6 +18,7 @@ namespace Mynell.Lottie.Scene
         public NativeList<float> Lengths;      // trim length tables
         public NativeList<float2> Temp;        // temporary points
         public NativeList<Contour> TempContours;
+        public NativeList<float> LevelsCache;  // Levels tables kept across frames: 5 parameters + 256 values each
 
         public static SceneScratch Create()
         {
@@ -32,6 +33,7 @@ namespace Mynell.Lottie.Scene
                 Lengths = new NativeList<float>(1024, Allocator.Persistent),
                 Temp = new NativeList<float2>(256, Allocator.Persistent),
                 TempContours = new NativeList<Contour>(16, Allocator.Persistent),
+                LevelsCache = new NativeList<float>(0, Allocator.Persistent),
             };
         }
 
@@ -40,6 +42,7 @@ namespace Mynell.Lottie.Scene
             if (!GroupLocal.IsCreated) return;
             GroupLocal.Dispose(); GroupWorld.Dispose(); GroupOpacity.Dispose(); GroupHidden.Dispose();
             ShapeRanges.Dispose(); ShapeSpace.Dispose(); Lengths.Dispose(); Temp.Dispose(); TempContours.Dispose();
+            LevelsCache.Dispose();
         }
     }
 
