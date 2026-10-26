@@ -17,7 +17,33 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "MYNELL_LOTTIE_BURST",
+        "MYNELL_LOTTIE_COLLECTIONS",
+        "MYNELL_LOTTIE_MATHEMATICS",
+        "MYNELL_LOTTIE_UGUI"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.burst",
+            "expression": "1.8.0",
+            "define": "MYNELL_LOTTIE_BURST"
+        },
+        {
+            "name": "com.unity.collections",
+            "expression": "2.1.0",
+            "define": "MYNELL_LOTTIE_COLLECTIONS"
+        },
+        {
+            "name": "com.unity.mathematics",
+            "expression": "1.3.0",
+            "define": "MYNELL_LOTTIE_MATHEMATICS"
+        },
+        {
+            "name": "com.unity.ugui",
+            "expression": "2.0.0",
+            "define": "MYNELL_LOTTIE_UGUI"
+        }
+    ],
     "noEngineReferences": false
 }
