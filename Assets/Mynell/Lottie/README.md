@@ -1,6 +1,6 @@
 # Mynell Lottie
 
-A Lottie player for Unity. Put a `.json` or `.lottie` file into the project, add a component, press Play.
+A Lottie player for Unity. Put a `.json` or `.lottie` file into the project, drag it into the scene, press Play.
 
 The goal is that every animation looks the same as in lottie-web, the official web player, and plays fast.
 The player is written in C# with Burst. There are no native plugins, so there is nothing to build per platform.
@@ -19,16 +19,32 @@ What it can do:
 Tested with Unity 6000.3 in the Editor and in macOS (Mono and IL2CPP), iOS (simulator), Android (IL2CPP, ARM64) and
 WebGL builds. Needs the Burst, Collections, Mathematics and uGUI packages.
 
+## Install
+
+*Window > Package Manager > + > Install package from git URL*, then paste:
+
+```
+https://github.com/NarekMynell/LottiePlayer.git?path=/Assets/Mynell/Lottie
+```
+
+The Package Manager also installs what the player needs (Burst, Collections, Mathematics, Unity UI). If you copy the
+`Lottie` folder into `Assets` instead, the player asks to install them the first time it loads, and stays turned off
+until they are there, without compile errors.
+
 ## Quick start
 
-1. Copy a Lottie `.json` or `.lottie` file into `Assets`. It is imported as a **Lottie Asset**. If a JSON file stays a
-   plain TextAsset, select it and run *Assets > Lottie > Import Selected JSON as Lottie*.
-2. Select the asset. The Inspector shows the size, frame rate, markers and a preview. If the file uses something the
-   player doesn't draw, it is listed there.
-3. Add it to the scene:
-   - UI: *GameObject > UI > Lottie Image*, then assign the asset.
-   - World / 2D: *GameObject > 2D Object > Lottie Renderer*.
-4. Press Play.
+1. Drop a Lottie `.json` or `.lottie` file into the project. It is imported as a **Lottie Asset**, with a preview and
+   a list of anything the player doesn't draw in the Inspector.
+2. Drag the asset into the Scene view or the Hierarchy. On a Canvas it becomes a **Lottie Image**, anywhere else a
+   **Lottie Renderer**, with the asset assigned.
+3. Press Play.
+
+The menus work too: *GameObject > UI > Lottie Image* and *GameObject > 2D Object > Lottie Renderer* (with a Lottie
+Asset selected, it is assigned).
+
+JSON files that were in the project before the player was installed are found the first time it loads, and it asks
+whether to import them as animations. Later, a Lottie JSON imported as plain text shows an *Import as Lottie* button
+in its Inspector.
 
 `Samples/LottieSamples.unity` has a spinner, a success check, a "like" heart controlled with markers and a world-space
 animation. The sample animations were made for this package and are free to use.
@@ -141,15 +157,16 @@ or speed for memory.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Resolution Scale | 1 | Multiplies the texture resolution of every Lottie Image, Lottie Renderer and Lottie Element. In the speed test below, 0.75 made a frame 1.5x faster and 0.5 2.6x faster (one core). |
-| Max Frame Rate | 0 | Most frames per second a playing animation is drawn, for example 30 on a 60 or 120 Hz screen. Playback speed stays the same, the texture is just updated less often. 0 means every frame. |
-| Threads Per Animation | 0 | Most threads one frame is split across. 0 means all worker threads. 1 draws each frame as one job, which uses less CPU time in total but takes longer per frame; several animations still draw in parallel. |
+| Limit Frame Rate, Max Frame Rate | off | Draws a playing animation at most *Max Frame Rate* times per second, for example 30 on a 60 or 120 Hz screen. Playback speed stays the same, the texture is just updated less often. |
+| Limit Threads, Threads Per Animation | off | Splits one frame across at most *Threads Per Animation* threads. Off uses all worker threads. 1 draws each frame as one job, which uses less CPU time in total but takes longer per frame; several animations still draw in parallel. |
 | Cache Shapes | on | Shapes that didn't change since the last frame aren't rasterized again. The pixels are the same either way. At 1024 x 1024 it takes about 0.1 - 0.3 MB per playing animation (up to 2 MB for long texts); turn it off if memory is tighter than CPU time. |
 
-The values are saved in `Assets/Resources/MynellLottieSettings.asset` when you change one, so builds use them too.
-From code, at runtime:
+Each setting has a tooltip that explains it. The values are saved in `Assets/Resources/MynellLottieSettings.asset`
+when you change one, so builds use them too. From code, at runtime:
 
 ```csharp
-LottieSettings.MaxFrameRate = 30;
+LottieSettings.MaxFrameRate = 30;          // 0 = no limit
+LottieSettings.ThreadsPerAnimation = 1;    // 0 = all worker threads
 LottieSettings.ResolutionScale = 0.75f;
 LottieSettings.Changed += () => Debug.Log("Lottie settings changed");
 LottieSettings.Reload();   // back to the saved values
@@ -313,4 +330,5 @@ next to the JSON file.
 - **Something is missing.** Check the asset in the Inspector, unsupported features are listed there.
 - **The animation is blurry.** Raise *Resolution Scale* or *Max Texture Size*.
 - **Dark edges.** Your material doesn't use premultiplied alpha blending (see Shaders).
-- **A JSON file is imported as a TextAsset.** Use *Assets > Lottie > Import Selected JSON as Lottie*.
+- **A JSON file is imported as a TextAsset.** Select it and click *Import as Lottie* in the Inspector (for many
+  files at once: *Assets > Lottie > Import Selected JSON as Lottie*).

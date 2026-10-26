@@ -16,6 +16,18 @@
 - Fixed inner shadows and inner glows in big frames on several cores: the bands didn't read around their edges, so
   glow lines could show along the band borders (up to 191/255 off in the test files). Shadows and directional blurs
   also sample with the same weights wherever a band starts.
+- Drag a Lottie Asset into the Scene view or the Hierarchy: on a Canvas it becomes a Lottie Image, anywhere else a
+  Lottie Renderer. One undo removes the drop.
+- JSON files are recognized as Lottie by their top-level keys anywhere in the file (before, only the first 4 KB were
+  read, so files starting with a big embedded image stayed plain text). Lottie JSON files that were in the project
+  before the player are offered for import once, and a Lottie JSON imported as text has an *Import as Lottie* button
+  in its Inspector.
+- Copied into `Assets` without Burst, Collections, Mathematics or Unity UI, the player no longer breaks the build: it
+  stays off and asks to install them (*Tools > Mynell Lottie > Install Required Packages*).
+- The settings page was read-only until the settings asset existed. Its fields are now editable from the start, frame
+  rate and thread limits are on/off switches instead of "0 = no limit", and the settings asset shows the same page.
+- Tooltips on every setting of the components and the settings page. JSON files no longer show the archive-only
+  *Main Animation* import setting.
 
 ## [1.0.0]
 
