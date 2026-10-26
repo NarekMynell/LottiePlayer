@@ -126,7 +126,7 @@ namespace Mynell.Lottie
         }
 
         /// <summary>An asset's values, brought into range (hand-edited or older assets).</summary>
-        static Values Read(LottieSettingsAsset asset) => new Values
+        internal static Values Read(LottieSettingsAsset asset) => new Values
         {
             ResolutionScale = ClampScale(asset.ResolutionScale),
             MaxFrameRate = Math.Max(0, asset.MaxFrameRate),

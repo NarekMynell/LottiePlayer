@@ -33,12 +33,12 @@ namespace Mynell.Lottie.Editor
             if (loopMode.hasMultipleDifferentValues || loopMode.enumValueIndex != (int)LottieLoopMode.Once)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(loopCount, new GUIContent("Loop Count", "Number of loops before completing; 0 = forever."));
+                EditorGUILayout.PropertyField(loopCount, new GUIContent("Loop Count", LottieTooltips.LoopCount));
                 EditorGUI.indentLevel--;
             }
             EditorGUILayout.PropertyField(speed);
             EditorGUILayout.PropertyField(unscaledTime);
-            EditorGUILayout.PropertyField(subframes, new GUIContent("Subframes", "Render fractional frames (smooth motion). Off snaps to whole frames."));
+            EditorGUILayout.PropertyField(subframes, new GUIContent("Subframes", LottieTooltips.Subframes));
         }
 
         /// <summary>
@@ -54,7 +54,7 @@ namespace Mynell.Lottie.Editor
                 EditorGUI.BeginChangeCheck();
                 float frames = Mathf.Max(0, asset.TotalFrames - 1);
                 float frame = Mathf.Round(previewTime.floatValue * frames * 100f) / 100f;
-                frame = EditorGUILayout.Slider(new GUIContent("Frame", "Frame shown in edit mode."), frame, 0, frames);
+                frame = EditorGUILayout.Slider(new GUIContent("Frame", "The frame shown while the game isn't running. Only the editor preview uses it."), frame, 0, frames);
                 if (EditorGUI.EndChangeCheck()) previewTime.floatValue = frames > 0 ? frame / frames : 0;
                 MarkerPopup(asset, f => previewTime.floatValue = frames > 0 ? Mathf.Clamp01((f - asset.InPoint) / frames) : 0);
                 return;
@@ -136,8 +136,7 @@ namespace Mynell.Lottie.Editor
             LottieEditorGUI.Playback(m_PlayOnEnable, m_LoopMode, m_LoopCount, m_Speed, m_UnscaledTime, m_Subframes);
 
             LottieEditorGUI.Header("Resolution");
-            EditorGUILayout.PropertyField(m_ResolutionScale, new GUIContent("Resolution Scale",
-                "Texture resolution relative to the element's on-screen pixel size (times the project's Resolution Scale)."));
+            EditorGUILayout.PropertyField(m_ResolutionScale, new GUIContent("Resolution Scale", LottieTooltips.ResolutionScale));
             EditorGUILayout.PropertyField(m_MaxTextureSize);
             if (targets.Length == 1 && image.isActiveAndEnabled && image.Player.Texture != null)
                 EditorGUILayout.LabelField(" ", $"{image.Player.Width} x {image.Player.Height} px", EditorStyles.miniLabel);
@@ -195,7 +194,7 @@ namespace Mynell.Lottie.Editor
             EditorGUILayout.PropertyField(m_Pivot);
             using (new EditorGUILayout.HorizontalScope())
             {
-                EditorGUILayout.PrefixLabel("Flip");
+                EditorGUILayout.PrefixLabel(new GUIContent("Flip", LottieTooltips.Flip));
                 m_FlipX.boolValue = GUILayout.Toggle(m_FlipX.boolValue, "X", EditorStyles.miniButtonLeft, GUILayout.Width(32));
                 m_FlipY.boolValue = GUILayout.Toggle(m_FlipY.boolValue, "Y", EditorStyles.miniButtonRight, GUILayout.Width(32));
             }
@@ -203,7 +202,7 @@ namespace Mynell.Lottie.Editor
             LottieEditorGUI.Playback(m_PlayOnEnable, m_LoopMode, m_LoopCount, m_Speed, m_UnscaledTime, m_Subframes);
 
             LottieEditorGUI.Header("Resolution");
-            EditorGUILayout.PropertyField(m_TextureScale, new GUIContent("Texture Scale", "Texture resolution relative to the composition size (times the project's Resolution Scale)."));
+            EditorGUILayout.PropertyField(m_TextureScale, new GUIContent("Texture Scale", LottieTooltips.TextureScale));
             EditorGUILayout.PropertyField(m_MaxTextureSize);
             if (targets.Length == 1 && renderer.isActiveAndEnabled && renderer.Player.Texture != null)
                 EditorGUILayout.LabelField(" ", $"{renderer.Player.Width} x {renderer.Player.Height} px", EditorStyles.miniLabel);

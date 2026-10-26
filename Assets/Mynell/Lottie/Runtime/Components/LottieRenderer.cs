@@ -14,21 +14,21 @@ namespace Mynell.Lottie
     [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
     public class LottieRenderer : MonoBehaviour
     {
-        [SerializeField] LottieAsset m_Asset;
-        [SerializeField] bool m_PlayOnEnable = true;
-        [SerializeField] LottieLoopMode m_LoopMode = LottieLoopMode.Loop;
-        [SerializeField, Min(0)] int m_LoopCount;
-        [SerializeField] float m_Speed = 1f;
-        [SerializeField] bool m_UnscaledTime;
-        [SerializeField] bool m_Subframes = true;
-        [SerializeField] Color m_Color = Color.white;
-        [SerializeField, Min(0.0001f)] float m_PixelsPerUnit = 100f;
-        [SerializeField] Vector2 m_Pivot = new Vector2(0.5f, 0.5f);
-        [SerializeField, Range(0.1f, 8f)] float m_TextureScale = 1f;
-        [SerializeField, Range(16, 8192)] int m_MaxTextureSize = 2048;
-        [SerializeField] bool m_FlipX, m_FlipY;
+        [SerializeField, Tooltip(LottieTooltips.Asset)] LottieAsset m_Asset;
+        [SerializeField, Tooltip(LottieTooltips.PlayOnEnable)] bool m_PlayOnEnable = true;
+        [SerializeField, Tooltip(LottieTooltips.LoopMode)] LottieLoopMode m_LoopMode = LottieLoopMode.Loop;
+        [SerializeField, Min(0), Tooltip(LottieTooltips.LoopCount)] int m_LoopCount;
+        [SerializeField, Tooltip(LottieTooltips.Speed)] float m_Speed = 1f;
+        [SerializeField, Tooltip(LottieTooltips.UnscaledTime)] bool m_UnscaledTime;
+        [SerializeField, Tooltip(LottieTooltips.Subframes)] bool m_Subframes = true;
+        [SerializeField, Tooltip(LottieTooltips.Color)] Color m_Color = Color.white;
+        [SerializeField, Min(0.0001f), Tooltip(LottieTooltips.PixelsPerUnit)] float m_PixelsPerUnit = 100f;
+        [SerializeField, Tooltip(LottieTooltips.Pivot)] Vector2 m_Pivot = new Vector2(0.5f, 0.5f);
+        [SerializeField, Range(0.1f, 8f), Tooltip(LottieTooltips.TextureScale)] float m_TextureScale = 1f;
+        [SerializeField, Range(16, 8192), Tooltip(LottieTooltips.MaxTextureSize)] int m_MaxTextureSize = 2048;
+        [SerializeField, Tooltip(LottieTooltips.Flip)] bool m_FlipX, m_FlipY;
         [SerializeField, Range(0f, 1f)] float m_EditorPreviewTime;
-        [SerializeField] UnityEvent m_OnComplete = new UnityEvent();
+        [SerializeField, Tooltip(LottieTooltips.OnComplete)] UnityEvent m_OnComplete = new UnityEvent();
 
         LottiePlayer m_Player;
         Mesh m_Mesh;

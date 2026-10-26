@@ -51,7 +51,7 @@ namespace Mynell.Lottie
 
         // ------------------------------------------------------------------ attributes
 
-        [UxmlAttribute]
+        [UxmlAttribute, Tooltip(LottieTooltips.Asset)]
         public LottieAsset Asset
         {
             get => m_Asset;
@@ -68,14 +68,14 @@ namespace Mynell.Lottie
             }
         }
 
-        [UxmlAttribute] public bool PlayOnAttach { get => m_PlayOnAttach; set => m_PlayOnAttach = value; }
-        [UxmlAttribute] public LottieLoopMode LoopMode { get => m_LoopMode; set { m_LoopMode = value; ApplySettings(); } }
-        [UxmlAttribute] public int LoopCount { get => m_LoopCount; set { m_LoopCount = Mathf.Max(0, value); ApplySettings(); } }
-        [UxmlAttribute] public float Speed { get => m_Speed; set { m_Speed = value; ApplySettings(); } }
-        [UxmlAttribute] public bool UnscaledTime { get => m_UnscaledTime; set { m_UnscaledTime = value; ApplySettings(); } }
-        [UxmlAttribute] public bool Subframes { get => m_Subframes; set { m_Subframes = value; ApplySettings(); } }
+        [UxmlAttribute, Tooltip(LottieTooltips.PlayOnAttach)] public bool PlayOnAttach { get => m_PlayOnAttach; set => m_PlayOnAttach = value; }
+        [UxmlAttribute, Tooltip(LottieTooltips.LoopMode)] public LottieLoopMode LoopMode { get => m_LoopMode; set { m_LoopMode = value; ApplySettings(); } }
+        [UxmlAttribute, Tooltip(LottieTooltips.LoopCount)] public int LoopCount { get => m_LoopCount; set { m_LoopCount = Mathf.Max(0, value); ApplySettings(); } }
+        [UxmlAttribute, Tooltip(LottieTooltips.Speed)] public float Speed { get => m_Speed; set { m_Speed = value; ApplySettings(); } }
+        [UxmlAttribute, Tooltip(LottieTooltips.UnscaledTime)] public bool UnscaledTime { get => m_UnscaledTime; set { m_UnscaledTime = value; ApplySettings(); } }
+        [UxmlAttribute, Tooltip(LottieTooltips.Subframes)] public bool Subframes { get => m_Subframes; set { m_Subframes = value; ApplySettings(); } }
 
-        [UxmlAttribute]
+        [UxmlAttribute, Tooltip(LottieTooltips.PreserveAspect)]
         public bool PreserveAspect
         {
             get => m_PreserveAspect;
@@ -88,7 +88,7 @@ namespace Mynell.Lottie
         }
 
         /// <summary>Texture resolution relative to the element's size in pixels.</summary>
-        [UxmlAttribute]
+        [UxmlAttribute, Tooltip(LottieTooltips.ResolutionScale)]
         public float ResolutionScale
         {
             get => m_ResolutionScale;
@@ -99,7 +99,7 @@ namespace Mynell.Lottie
             }
         }
 
-        [UxmlAttribute]
+        [UxmlAttribute, Tooltip(LottieTooltips.MaxTextureSize)]
         public int MaxTextureSize
         {
             get => m_MaxTextureSize;
@@ -110,7 +110,7 @@ namespace Mynell.Lottie
             }
         }
 
-        [UxmlAttribute]
+        [UxmlAttribute, Tooltip(LottieTooltips.Color)]
         public Color Tint
         {
             get => m_Tint;
