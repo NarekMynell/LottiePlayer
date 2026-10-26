@@ -298,6 +298,7 @@ next to the JSON file.
 
 - Each player renders in Burst jobs on worker threads. Big frames (more than 512 x 256 pixels) are split into bands
   that render in parallel. When many players render at once, the bands are shared so the threads aren't overloaded.
+  The bands give exactly the same pixels as one piece would, so the result doesn't depend on the number of cores.
 - A frame that looks the same as the previous one is neither drawn nor uploaded again, and shapes that didn't change
   since the previous frame aren't rasterized again.
 - Texture size is the main cost. Keep *Resolution Scale* at 1 and lower *Max Texture Size* for big animations when

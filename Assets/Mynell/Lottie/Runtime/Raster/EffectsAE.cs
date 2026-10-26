@@ -543,15 +543,31 @@ namespace Mynell.Lottie.Raster
                 k[i + radius] = v;
                 sum += v;
             }
+            // Tap i reads the source dir * i away, bilinear: whole pixels and fraction per tap, the same for every pixel
+            // (so the result doesn't depend on where the surface starts).
             float2 dir = op.A.xy;
+            int2* whole = stackalloc int2[2 * 256 + 1];
+            float2* frac = stackalloc float2[2 * 256 + 1];
+            for (int i = -radius; i <= radius; i++)
+            {
+                float2 o = dir * i, f = math.floor(o);
+                whole[i + radius] = (int2)f;
+                frac[i + radius] = o - f;
+            }
             for (int y = 0; y < dst.H; y++)
             {
                 uint* row = dst.Px + y * dst.W;
                 for (int x = 0; x < dst.W; x++)
                 {
-                    float2 p = dst.Center(x, y);
                     float4 acc = float4.zero;
-                    for (int i = -radius; i <= radius; i++) acc += Sample(src, p + dir * i) * k[i + radius];
+                    for (int i = 0; i <= 2 * radius; i++)
+                    {
+                        int2 q = new int2(x, y) + whole[i] + new int2(dst.X0 - src.X0, dst.Y0 - src.Y0);
+                        float2 w = frac[i];
+                        float4 c00 = Fetch(src, q.x, q.y), c10 = Fetch(src, q.x + 1, q.y);
+                        float4 c01 = Fetch(src, q.x, q.y + 1), c11 = Fetch(src, q.x + 1, q.y + 1);
+                        acc += math.lerp(math.lerp(c00, c10, w.x), math.lerp(c01, c11, w.x), w.y) * k[i];
+                    }
                     row[x] = PackPremul(acc / sum);
                 }
             }
@@ -631,13 +647,16 @@ namespace Mynell.Lottie.Raster
             BlurRGBA(blur, t.W, t.H, op.Z, op.W, tmp + n);
             bool inner = (op.Flags & 1) != 0;
             float4 col = new float4(op.A.xyz * op.A.w, op.A.w);
+            // Shadow alpha at (x - dx, y - dy), bilinear; outside the surface the source is transparent. The offset is
+            // split into whole pixels and a fraction once, so the weights don't depend on where the surface starts.
+            int ix = (int)math.floor(-op.X), iy = (int)math.floor(-op.Y);
+            float fx = -op.X - ix, fy = -op.Y - iy;
             for (int y = 0; y < t.H; y++)
             {
                 uint* row = t.Px + y * t.W;
                 for (int x = 0; x < t.W; x++)
                 {
-                    // Shadow alpha at (x - dx, y - dy), bilinear; outside the surface the source is transparent.
-                    float a = SampleAlpha(blur, t.W, t.H, x - op.X, y - op.Y, 0);
+                    float a = SampleAlpha(blur, t.W, t.H, x + ix, y + iy, fx, fy);
                     uint src = row[x];
                     if (inner)
                     {
@@ -692,19 +711,17 @@ namespace Mynell.Lottie.Raster
             }
         }
 
-        static float SampleAlpha(uint* buf, int w, int h, float x, float y, float outside)
+        /// <summary>Bilinear alpha between pixels (x0, y0) and (x0 + 1, y0 + 1) at fractions (tx, ty); 0 outside.</summary>
+        static float SampleAlpha(uint* buf, int w, int h, int x0, int y0, float tx, float ty)
         {
-            float fx = math.floor(x), fy = math.floor(y);
-            int x0 = (int)fx, y0 = (int)fy;
-            float tx = x - fx, ty = y - fy;
-            float a00 = AlphaAt(buf, w, h, x0, y0, outside), a10 = AlphaAt(buf, w, h, x0 + 1, y0, outside);
-            float a01 = AlphaAt(buf, w, h, x0, y0 + 1, outside), a11 = AlphaAt(buf, w, h, x0 + 1, y0 + 1, outside);
+            float a00 = AlphaAt(buf, w, h, x0, y0), a10 = AlphaAt(buf, w, h, x0 + 1, y0);
+            float a01 = AlphaAt(buf, w, h, x0, y0 + 1), a11 = AlphaAt(buf, w, h, x0 + 1, y0 + 1);
             return math.lerp(math.lerp(a00, a10, tx), math.lerp(a01, a11, tx), ty);
         }
 
-        static float AlphaAt(uint* buf, int w, int h, int x, int y, float outside)
+        static float AlphaAt(uint* buf, int w, int h, int x, int y)
         {
-            if ((uint)x >= (uint)w || (uint)y >= (uint)h) return outside;
+            if ((uint)x >= (uint)w || (uint)y >= (uint)h) return 0;
             return (buf[y * w + x] >> 24) * Blend.Inv255;
         }
 

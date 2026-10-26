@@ -356,7 +356,9 @@ namespace Mynell.Lottie.Raster
             public ulong Geometry;
             public int4 Box;
             public float4 Clip;
-            public int FillRule, Pad;
+            public int FillRule;
+            /// <summary>First raster row of the box (rows count from the item's top, see FrameRenderer.PrepareCoverage).</summary>
+            public int Row0;
         }
 
         struct Entry

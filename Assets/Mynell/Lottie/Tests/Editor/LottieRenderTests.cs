@@ -129,12 +129,22 @@ namespace Mynell.Lottie.Tests
                             ShapeLayer("{\"ty\":\"el\",\"p\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[80,50]}}," + Fill(0, 0.4f, 1, 70), Transform, 2);
             string json = Comp(layers);
             var single = Render(json, 0, 640, 1);
-            var banded = Render(json, 0, 640, 16);
-            int worst = 0;
-            for (int i = 0; i < single.Length; i++)
-                for (int c = 0; c < 32; c += 8)
-                    worst = Math.Max(worst, Math.Abs((int)((single[i] >> c) & 255) - (int)((banded[i] >> c) & 255)));
-            Assert.LessOrEqual(worst, 1, "banded output differs from single-threaded output");
+            foreach (int bands in new[] { 5, 13, 16 })
+                CollectionAssert.AreEqual(single, Render(json, 0, 640, bands), $"{bands} bands differ from one band");
+        }
+
+        [Test]
+        public void BandedRendering_MatchesSingleThreadedWithLayerStyles()
+        {
+            // Blurred drop shadow at a fractional offset and an inner glow: both read pixels around each band.
+            string styles = ",\"sy\":[{\"ty\":1,\"c\":{\"a\":0,\"k\":[0,0,1,1]},\"o\":{\"a\":0,\"k\":75},\"a\":{\"a\":0,\"k\":120}," +
+                            "\"s\":{\"a\":0,\"k\":8},\"d\":{\"a\":0,\"k\":7.3}},{\"ty\":4,\"c\":{\"a\":0,\"k\":[1,1,0,1]}," +
+                            "\"o\":{\"a\":0,\"k\":80},\"s\":{\"a\":0,\"k\":6}}]";
+            string json = Comp(ShapeLayer("{\"ty\":\"el\",\"p\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[60,70]}}," + Fill(1, 0.3f, 0.2f),
+                Transform, 1, styles));
+            var single = Render(json, 0, 640, 1);
+            foreach (int bands in new[] { 5, 13 })
+                CollectionAssert.AreEqual(single, Render(json, 0, 640, bands), $"{bands} bands differ from one band");
         }
 
         [Test]

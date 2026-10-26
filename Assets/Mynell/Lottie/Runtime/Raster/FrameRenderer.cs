@@ -509,10 +509,11 @@ namespace Mynell.Lottie.Raster
                         float4 content = G.GroupContent[g];
                         if (gd.EffectCount > 0)
                         {
-                            float2 reach = float2.zero;
+                            float2 halo = float2.zero;
                             for (int k = 0; k < gd.EffectCount; k++)
                             {
                                 var op = F.Effects[gd.EffectFirst + k];
+                                halo += Effects.Halo(op);
                                 if (!SceneBuilder.IsEmpty(op.OutputRect))
                                 {
                                     // The effect draws its own region (motion tile output, sphere, corner pin quad...);
@@ -526,9 +527,8 @@ namespace Mynell.Lottie.Raster
                                 if (op.Kind == EffectOpKind.Levels && op.TableA >= 0 && F.PaintFloats[op.TableA] > 0.5f / 255f && !SceneBuilder.IsEmpty(content))
                                     r += (content.zw - content.xy) * 0.1f;
                                 if (!SceneBuilder.IsEmpty(content)) content += new float4(-r, r);
-                                reach += r;
                             }
-                            G.GroupReach[g] += reach;
+                            G.GroupReach[g] += halo;
                         }
                         float4 b = SceneBuilder.Intersect(content, gd.Clip);
                         // Visible area is limited by an additive mask (starting empty) ...
@@ -1096,22 +1096,26 @@ namespace Mynell.Lottie.Raster
         int4 ItemBox(int itemIndex, int4 targetRect) => IntersectI(RoundOut(G.ItemBounds[itemIndex]), targetRect);
 
         /// <summary>
-        /// Prepares the coverage of an item over a non-empty <paramref name="box"/> (from <see cref="ItemBox"/>). Every row
-        /// of the box must then be read with <see cref="CoverageRow"/>, in order.
+        /// Prepares the coverage of an item over a non-empty <paramref name="box"/> (from <see cref="ItemBox"/> with
+        /// <paramref name="target"/>). Every row of the box must then be read with <see cref="CoverageRow"/>, in order.
         /// </summary>
-        void PrepareCoverage(int itemIndex, in DrawItem item, int4 box, out ItemCoverage cov)
+        void PrepareCoverage(int itemIndex, in DrawItem item, int4 box, in Surface target, out ItemCoverage cov)
         {
             cov = default;
             cov.Record = -1;
             cov.Box = box;
             cov.EvenOdd = item.FillRule == 1;
             int w = box.z - box.x, h = box.w - box.y;
-            float4 clip = SceneBuilder.Intersect(item.Clip, new float4(box.x, box.y, box.z, box.w));
-            clip -= new float4(box.x, box.y, box.x, box.y);
+            // Raster rows count from the item's top (or the frame's, when the item starts above it), not from the box's:
+            // a band then rasterizes its rows exactly like a single band covering the whole frame.
+            int oy = math.max(RoundOut(G.ItemBounds[itemIndex]).y, math.min(0, target.Y0));
+            int row0 = box.y - oy;
+            float4 clip = SceneBuilder.Intersect(item.Clip, new float4(box.x, oy, box.z, box.w));
+            clip -= new float4(box.x, oy, box.x, oy);
             ulong geometry = NoShapeCache ? 0 : G.ItemIds[itemIndex];
             if (geometry != 0)
             {
-                var key = new CoverageCache.Key { Geometry = geometry, Box = box, Clip = clip, FillRule = item.FillRule };
+                var key = new CoverageCache.Key { Geometry = geometry, Box = box, Clip = clip, FillRule = item.FillRule, Row0 = row0 };
                 if (R.Coverage.TryGet(key, out cov.Cached, out cov.Offsets)) return;
                 cov.Record = R.Coverage.Begin(key, h);
             }
@@ -1140,10 +1144,10 @@ namespace Mynell.Lottie.Raster
             cov.Sweep = (CoverageSpan*)R.Spans.GetUnsafePtr();
             ref CoverageRasterizer ras = ref cov.Ras;
             ras.Begin((float*)R.Acc.GetUnsafePtr(), (ulong*)R.Bits.GetUnsafePtr(), (int*)R.RowMin.GetUnsafePtr(),
-                (int*)R.RowMax.GetUnsafePtr(), w, h, clip);
+                (int*)R.RowMax.GetUnsafePtr(), w, h, clip, row0);
 
             float2* gp = (float2*)G.GeoPts.GetUnsafeReadOnlyPtr();
-            float2 origin = new float2(box.x, box.y);
+            float2 origin = new float2(box.x, oy);
             if (G.ItemChunks.Length != 0)
             {
                 int2 chunks = G.ItemChunks[itemIndex];
@@ -1208,7 +1212,7 @@ namespace Mynell.Lottie.Raster
             PaintData paint = F.Paints[item.Paint];
             var shader = PaintShader.Create(paint, F.PaintFloats, ImagePixels, ImageInfo, ImageCount);
             if (shader.Transparent) return false;
-            PrepareCoverage(itemIndex, item, box, out ItemCoverage coverage);
+            PrepareCoverage(itemIndex, item, box, target, out ItemCoverage coverage);
             if (Stats != null) Stats[4]++;
             int h = box.w - box.y;
             uint* px = Px(target);
@@ -1392,7 +1396,7 @@ namespace Mynell.Lottie.Raster
                 // Direct application: pixels outside the coverage are unaffected by add / subtract / lighten / difference.
                 int4 b = ItemBox(itemIndex, target.Rect);
                 if (EmptyI(b)) return;
-                PrepareCoverage(itemIndex, item, b, out ItemCoverage coverage);
+                PrepareCoverage(itemIndex, item, b, target, out ItemCoverage coverage);
                 byte* mp = MaskPx(target);
                 MaskOp direct = item.Mask;
                 int h = b.w - b.y;
@@ -1420,7 +1424,7 @@ namespace Mynell.Lottie.Raster
             int4 box = ItemBox(itemIndex, target.Rect);
             if (!EmptyI(box))
             {
-                PrepareCoverage(itemIndex, item, box, out ItemCoverage coverage);
+                PrepareCoverage(itemIndex, item, box, target, out ItemCoverage coverage);
                 byte* tp = (byte*)R.MaskArena.GetUnsafePtr() + _mergeOffset;
                 int h = box.w - box.y;
                 for (int y = 0; y < h; y++)

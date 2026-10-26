@@ -13,9 +13,12 @@ namespace Mynell.Lottie.Raster
     /// Exact-area coverage rasterizer (signed area accumulation, font-rs / FreeType style) with sparse rows:
     /// every accumulation cell written by an edge is flagged in a per-row bitmap, so a row resolves into
     /// single-pixel edge spans plus long constant-coverage interior runs.
-    /// Works on a raster box [0, W) x [0, H) with a fractional clip rectangle inside it: segments are cut
-    /// against the clip in y and clamped (after splitting) in x, which is equivalent to clipping the
+    /// Works on a raster box [0, W) x [Row0, Row0 + H) with a fractional clip rectangle inside it: segments are
+    /// cut against the clip in y and clamped (after splitting) in x, which is equivalent to clipping the
     /// polygons against the rectangle, so clip edges are anti-aliased exactly.
+    /// Where an edge crosses a row is computed from its end points, never accumulated row by row, so the rows
+    /// of a raster get the same coverage whichever part of the raster is stored (bands of a frame match the
+    /// whole frame bit for bit).
     /// </summary>
     public unsafe struct CoverageRasterizer
     {
@@ -26,12 +29,18 @@ namespace Mynell.Lottie.Raster
         public int* RowMin;
         public int* RowMax;
         public int W, H, Stride, WordStride;
+        /// <summary>First stored row: rows [Row0, Row0 + H) of the raster are accumulated, row y at index y - Row0.</summary>
+        public int Row0;
         public float CX0, CY0, CX1, CY1;
 
         public static int CellStride(int w) => w + 2;
         public static int WordsPerRow(int w) => (w + 2 + 63) >> 6;
 
-        public void Begin(float* acc, ulong* bits, int* rowMin, int* rowMax, int w, int h, float4 clip)
+        /// <summary>
+        /// Starts a raster W wide whose rows [<paramref name="row0"/>, <paramref name="row0"/> + <paramref name="h"/>) are
+        /// stored. <paramref name="clip"/> is in raster coordinates.
+        /// </summary>
+        public void Begin(float* acc, ulong* bits, int* rowMin, int* rowMax, int w, int h, float4 clip, int row0 = 0)
         {
             Acc = acc;
             Bits = bits;
@@ -41,10 +50,11 @@ namespace Mynell.Lottie.Raster
             H = h;
             Stride = CellStride(w);
             WordStride = WordsPerRow(w);
+            Row0 = row0;
             CX0 = math.clamp(clip.x, 0, w);
-            CY0 = math.clamp(clip.y, 0, h);
+            CY0 = math.clamp(clip.y, row0, row0 + h);
             CX1 = math.clamp(clip.z, 0, w);
-            CY1 = math.clamp(clip.w, 0, h);
+            CY1 = math.clamp(clip.w, row0, row0 + h);
             for (int y = 0; y < h; y++)
             {
                 rowMin[y] = int.MaxValue;
@@ -52,24 +62,12 @@ namespace Mynell.Lottie.Raster
             }
         }
 
-        /// <summary>Adds one polygon edge (raster-relative coordinates).</summary>
+        /// <summary>Adds one polygon edge (raster coordinates).</summary>
         public void Edge(float x0, float y0, float x1, float y1)
         {
             if (y0 == y1) return;
-            // Cut against the clip rectangle vertically.
-            if (y0 < y1)
-            {
-                if (y1 <= CY0 || y0 >= CY1) return;
-                if (y0 < CY0) { x0 += (x1 - x0) * (CY0 - y0) / (y1 - y0); y0 = CY0; }
-                if (y1 > CY1) { x1 = x0 + (x1 - x0) * (CY1 - y0) / (y1 - y0); y1 = CY1; }
-            }
-            else
-            {
-                if (y0 <= CY0 || y1 >= CY1) return;
-                if (y1 < CY0) { x1 += (x0 - x1) * (CY0 - y1) / (y0 - y1); y1 = CY0; }
-                if (y0 > CY1) { x0 = x1 + (x0 - x1) * (CY1 - y1) / (y0 - y1); y0 = CY1; }
-            }
-            if (y0 == y1) return;
+            // Entirely above or below the clip (Line cuts the rest vertically).
+            if (math.max(y0, y1) <= CY0 || math.min(y0, y1) >= CY1) return;
 
             // Split at the vertical clip lines; parts outside are projected onto them.
             bool cross0 = (x0 < CX0) != (x1 < CX0);
@@ -136,11 +134,16 @@ namespace Mynell.Lottie.Raster
                 float t = x0; x0 = x1; x1 = t;
                 t = y0; y0 = y1; y1 = t;
             }
+            // The part inside the clip.
+            float ya = math.max(y0, CY0), yb = math.min(y1, CY1);
+            if (!(ya < yb)) return;
             float dxdy = (x1 - x0) / (y1 - y0);
-            float x = x0;
-            int yStart = math.max(0, (int)y0);
-            int yEnd = math.min(H, (int)math.ceil(y1));
+            // x where the edge crosses height t is x0 + dxdy * (t - y0), from the end points every time.
+            float x = x0 + dxdy * (ya - y0);
+            int yStart = (int)math.floor(ya);
+            int yEnd = (int)math.ceil(yb);
             float wMax = W;
+            int row0 = Row0;
             // Fields in locals (the cell stores could alias this struct, so they would be reloaded every row).
             float* acc = Acc;
             ulong* allBits = Bits;
@@ -148,9 +151,10 @@ namespace Mynell.Lottie.Raster
             int stride = Stride, wordStride = WordStride;
             for (int y = yStart; y < yEnd; y++)
             {
-                float dy = math.min(y + 1f, y1) - math.max((float)y, y0);
+                float bottom = math.min(y + 1f, yb);
+                float dy = bottom - math.max((float)y, ya);
                 if (dy <= 0) continue;
-                float xnext = x + dxdy * dy;
+                float xnext = x0 + dxdy * (bottom - y0);
                 float d = dy * dir;
                 float xa = math.clamp(math.min(x, xnext), 0, wMax);
                 float xb = math.clamp(math.max(x, xnext), 0, wMax);
@@ -158,8 +162,9 @@ namespace Mynell.Lottie.Raster
                 int xai = (int)xaFloor;
                 float xbCeil = math.ceil(xb);
                 int xbi = (int)xbCeil;
-                float* row = acc + y * stride;
-                ulong* bits = allBits + y * wordStride;
+                int r = y - row0;
+                float* row = acc + r * stride;
+                ulong* bits = allBits + r * wordStride;
                 if (xbi <= xai + 1)
                 {
                     float xmf = 0.5f * (xa + xb) - xaFloor;
@@ -191,8 +196,8 @@ namespace Mynell.Lottie.Raster
                     row[xbi] += d * am;
                 }
                 Touch(bits, xai, xbi);
-                if (xai < rowMin[y]) rowMin[y] = xai;
-                if (xbi > rowMax[y]) rowMax[y] = xbi;
+                if (xai < rowMin[r]) rowMin[r] = xai;
+                if (xbi > rowMax[r]) rowMax[r] = xbi;
                 x = xnext;
             }
         }

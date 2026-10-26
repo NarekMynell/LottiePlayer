@@ -9,6 +9,13 @@
 - Project settings: *Edit > Project Settings > Mynell Lottie* or `LottieSettings` from code. Resolution scale for all
   components, max frame rate, threads per animation and the shape cache.
 - `LottieRenderState.CacheShapes` and `LottieRenderState.Threads`.
+- A frame drawn in bands now has exactly the same pixels as the frame drawn in one piece, so the result no longer
+  depends on how many cores a device has or how many animations play at once. Where an edge crosses a pixel row is
+  now computed from its end points instead of being added up row by row: compared with the same rasterizer in double
+  precision, the largest coverage error went from 7/255 to 1/255.
+- Fixed inner shadows and inner glows in big frames on several cores: the bands didn't read around their edges, so
+  glow lines could show along the band borders (up to 191/255 off in the test files). Shadows and directional blurs
+  also sample with the same weights wherever a band starts.
 
 ## [1.0.0]
 

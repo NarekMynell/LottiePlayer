@@ -33,6 +33,39 @@ namespace Mynell.Lottie.Raster
             }
         }
 
+        /// <summary>
+        /// How far from a pixel an effect reads its source (device pixels, x / y). A band draws a layer that much beyond
+        /// its rows, so that it gets the same pixels as one band drawing the whole frame. Inner shadows and glows push
+        /// nothing outside the layer (<see cref="Reach"/> is zero) but still read around each pixel.
+        /// </summary>
+        public static float2 Halo(in EffectOp op)
+        {
+            switch (op.Kind)
+            {
+                case EffectOpKind.GaussianBlur:
+                    return new float2(BlurSupport(op.Z), BlurSupport(op.W));
+                case EffectOpKind.DropShadow:
+                case EffectOpKind.StyleShadow:
+                    // The blurred alpha is sampled bilinearly at the offset.
+                    return math.abs(new float2(op.X, op.Y)) + new float2(BlurSupport(op.Z), BlurSupport(op.W)) + 1f;
+                case EffectOpKind.StyleGlow:
+                    if ((op.Flags & 4) != 0) return new float2(op.Z, op.W) + 2f;
+                    return new float2(BlurSupport(op.Z), BlurSupport(op.W));
+                case EffectOpKind.DirectionalBlur:
+                    // Taps up to ceil(3 sigma) steps along the direction, each sampled bilinearly.
+                    return math.abs(op.A.xy) * math.min(math.ceil(op.X * 3f), 256f) + 2f;
+                default:
+                    return Reach(op);
+            }
+        }
+
+        /// <summary>How far a <see cref="BlurRGBA"/> pass reads along its direction: the kernel radius, or three boxes.</summary>
+        static int BlurSupport(float sigma)
+        {
+            if (!(sigma > 0.01f)) return 0;
+            return sigma < 2f ? math.min(math.max(1, (int)math.ceil(sigma * 3f)), 64) : 3 * (BoxSize(sigma) / 2 + 1);
+        }
+
         // ------------------------------------------------------------------ colour operations
 
         static float SrgbToLinear(float c) => c <= 0.04045f ? c / 12.92f : math.pow((c + 0.055f) / 1.055f, 2.4f);
