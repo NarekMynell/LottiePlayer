@@ -235,7 +235,8 @@ namespace Mynell.Lottie
         /// <summary>Automatic mode: bands per thread (more bands than threads balance uneven content).</summary>
         internal const int BandsPerThread = 4;
 
-        const int MinBandHeight = 48;
+        /// <summary>Fewest rows a band gets: thinner bands cost more in scheduling and per-band work than they save.</summary>
+        const int MinBandHeight = 64;
 
         /// <summary>Debug: when set, band jobs write the executing thread index here (one int per band).</summary>
         internal unsafe int* DebugThreadLog;
