@@ -41,6 +41,8 @@ namespace Mynell.Lottie
         public bool SkipUnchanged;
         /// <summary>Only build the scene and geometry; rows are rasterized by <see cref="RenderBandJob"/>s.</summary>
         public bool PrepareOnly;
+        /// <summary>Don't reuse geometry and coverage from the previous frame (see <see cref="FrameRenderer.NoShapeCache"/>).</summary>
+        public bool NoShapeCache;
         /// <summary>Optional property overrides (see <see cref="LottieOverrides"/>).</summary>
         [NativeDisableUnsafePtrRestriction] public int* OverrideSlots;
         [NativeDisableUnsafePtrRestriction] public float4* OverrideValues;
@@ -74,6 +76,7 @@ namespace Mynell.Lottie
                 RootH = Height,
                 Tolerance = Tolerance > 0 ? Tolerance : 0.03f,
                 Banded = PrepareOnly,
+                NoShapeCache = NoShapeCache,
                 Stats = Stats,
                 ImagePixels = (uint*)ImagePixels.GetUnsafeReadOnlyPtr(),
                 ImageInfo = (int4*)ImageInfo.GetUnsafeReadOnlyPtr(),
@@ -133,6 +136,8 @@ namespace Mynell.Lottie
         public int Width, Height, Y0, Y1;
         [NativeDisableUnsafePtrRestriction] public uint* Pixels;
         public float Tolerance;
+        /// <summary>Must match the <see cref="RenderFrameJob"/> of the frame.</summary>
+        public bool NoShapeCache;
         /// <summary>Debug: receives the worker thread index that executed this band (null = off).</summary>
         [NativeDisableUnsafePtrRestriction] public int* ThreadLog;
         [NativeSetThreadIndex] int _threadIndex;
@@ -157,6 +162,7 @@ namespace Mynell.Lottie
                 RootW = Width,
                 RootH = Height,
                 Tolerance = Tolerance > 0 ? Tolerance : 0.03f,
+                NoShapeCache = NoShapeCache,
                 ImagePixels = (uint*)ImagePixels.GetUnsafeReadOnlyPtr(),
                 ImageInfo = (int4*)ImageInfo.GetUnsafeReadOnlyPtr(),
                 ImageCount = ImageInfo.Length,

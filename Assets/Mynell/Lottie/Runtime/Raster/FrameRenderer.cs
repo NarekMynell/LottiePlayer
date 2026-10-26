@@ -39,6 +39,12 @@ namespace Mynell.Lottie.Raster
         public NativeList<CoverageSpan> Spans;
         public NativeList<FrameRenderer.Surface> Surfaces;
         public NativeList<FrameRenderer.StackEntry> Stack;
+        /// <summary>Per item: id of its geometry when unchanged since the previous frame, else 0.</summary>
+        internal NativeList<ulong> ItemIds;
+        /// <summary>Geometry kept across frames (used where the geometry is built).</summary>
+        internal GeometryCache Geometry;
+        /// <summary>Coverage kept across frames (used where the rows are rasterized).</summary>
+        internal CoverageCache Coverage;
 
         public static RasterScratch Create()
         {
@@ -73,6 +79,9 @@ namespace Mynell.Lottie.Raster
                 Spans = new NativeList<CoverageSpan>(0, Allocator.Persistent),
                 Surfaces = new NativeList<FrameRenderer.Surface>(16, Allocator.Persistent),
                 Stack = new NativeList<FrameRenderer.StackEntry>(16, Allocator.Persistent),
+                ItemIds = new NativeList<ulong>(64, Allocator.Persistent),
+                Geometry = GeometryCache.Create(),
+                Coverage = CoverageCache.Create(),
             };
         }
 
@@ -84,6 +93,7 @@ namespace Mynell.Lottie.Raster
             LocalPts.Dispose(); LocalPolys.Dispose(); DashPts.Dispose(); DashPolys.Dispose(); StrokeTmp.Dispose();
             Arena.Dispose(); MaskArena.Dispose(); Acc.Dispose(); RowMin.Dispose(); RowMax.Dispose(); Bits.Dispose(); Spans.Dispose();
             Surfaces.Dispose(); Stack.Dispose();
+            ItemIds.Dispose(); Geometry.Dispose(); Coverage.Dispose();
         }
     }
 
@@ -143,6 +153,11 @@ namespace Mynell.Lottie.Raster
         /// so that a band skips the edges outside its rows.
         /// </summary>
         public bool Banded;
+        /// <summary>
+        /// Builds every item's geometry and coverage from scratch instead of reusing what is unchanged since the previous
+        /// frame (the caches are emptied).
+        /// </summary>
+        public bool NoShapeCache;
         /// <summary>Optional debug counters: [0] item span pixels, [1] group composite pixels, [2] cleared pixels, [3] edges, [4] items drawn,
         /// [5] gradient / image pixels, [6] opaque solid pixels. Single-threaded use only.</summary>
         [NativeDisableUnsafePtrRestriction] public long* Stats;
@@ -241,6 +256,8 @@ namespace Mynell.Lottie.Raster
             BandY0 = math.clamp(y0, 0, RootH);
             BandY1 = math.clamp(y1, BandY0, RootH);
             if (BandY1 <= BandY0) return;
+            if (NoShapeCache) R.Coverage.Release();
+            else R.Coverage.BeginFrame(G.Geometry.Owner);
             Execute();
         }
 
@@ -253,48 +270,76 @@ namespace Mynell.Lottie.Raster
             G.GeoPolys.Clear();
             G.ItemGeo.ResizeUninitialized(n);
             G.ItemBounds.ResizeUninitialized(n);
+            G.ItemIds.ResizeUninitialized(n);
             G.Chunks.Clear();
             if (Banded) G.ItemChunks.ResizeUninitialized(n);
             else G.ItemChunks.Clear();
+            bool cache = !NoShapeCache;
+            if (cache) G.Geometry.BeginFrame();
+            else G.Geometry.Release();
             float2* pts = (float2*)F.Points.GetUnsafeReadOnlyPtr();
             for (int i = 0; i < n; i++)
             {
                 DrawItem item = F.Items[i];
                 int polyFirst = G.GeoPolys.Length;
                 int ptFirst = G.GeoPts.Length;
-                if (item.Kind == ItemKind.Fill) FillGeometry(item, pts);
-                else StrokeGeometry(item, pts);
-
-                float4 b = SceneBuilder.EmptyRect;
-                float2* gp = (float2*)G.GeoPts.GetUnsafePtr();
-                int ptEnd = G.GeoPts.Length;
-                if (ptEnd > ptFirst)
+                int chunkFirst = G.Chunks.Length;
+                ulong id = 0;
+                float4 bounds;   // of the points
+                int e = -1;
+                GeometryCache.Pending pending = default;
+                bool cached = cache && item.ContourCount > 0;
+                if (cached) e = G.Geometry.Find(F, item, Tolerance, out pending);
+                if (e >= 0)
                 {
-                    float2 mn = gp[ptFirst], mx = gp[ptFirst];
-                    for (int k = ptFirst + 1; k < ptEnd; k++)
+                    // Same inputs as an item of the previous frame: copy its polygons.
+                    G.Geometry.EmitGeometry(e, G.GeoPts, G.GeoPolys);
+                    if (Banded) G.Geometry.EmitChunks(e, ptFirst, G.Chunks);
+                    bounds = G.Geometry[e].Bounds;
+                    id = G.Geometry[e].Id;
+                }
+                else
+                {
+                    if (item.Kind == ItemKind.Fill) FillGeometry(item, pts);
+                    else StrokeGeometry(item, pts);
+                    float2* gp = (float2*)G.GeoPts.GetUnsafePtr();
+                    int ptEnd = G.GeoPts.Length;
+                    bounds = SceneBuilder.EmptyRect;
+                    if (ptEnd > ptFirst)
                     {
-                        mn = math.min(mn, gp[k]);
-                        mx = math.max(mx, gp[k]);
+                        float2 mn = gp[ptFirst], mx = gp[ptFirst];
+                        for (int k = ptFirst + 1; k < ptEnd; k++)
+                        {
+                            mn = math.min(mn, gp[k]);
+                            mx = math.max(mx, gp[k]);
+                        }
+                        bounds = new float4(mn, mx);
                     }
-                    b = SceneBuilder.Intersect(new float4(mn, mx), item.Clip);
+                    int polyCount = G.GeoPolys.Length - polyFirst;
+                    var polys = (Poly*)G.GeoPolys.GetUnsafePtr() + polyFirst;
+                    if (cached)
+                        e = G.Geometry.Add(pending, gp + ptFirst, ptEnd - ptFirst, polys, polyCount, ptFirst, bounds);
+                    if (Banded)
+                    {
+                        if (e >= 0) G.Geometry.EmitChunks(e, ptFirst, G.Chunks);
+                        else
+                            for (int p = 0; p < polyCount; p++)
+                                if (polys[p].Count >= 2) AddChunks(gp + polys[p].First, polys[p].First, polys[p].Count, G.Chunks);
+                    }
                 }
-                G.ItemBounds[i] = b;
+                G.ItemBounds[i] = G.GeoPts.Length > ptFirst ? SceneBuilder.Intersect(bounds, item.Clip) : SceneBuilder.EmptyRect;
                 G.ItemGeo[i] = new int2(polyFirst, G.GeoPolys.Length - polyFirst);
-                if (Banded)
-                {
-                    int chunkFirst = G.Chunks.Length;
-                    for (int p = polyFirst; p < G.GeoPolys.Length; p++) AddChunks(G.GeoPolys[p], gp);
-                    G.ItemChunks[i] = new int2(chunkFirst, G.Chunks.Length - chunkFirst);
-                }
+                G.ItemIds[i] = id;
+                if (Banded) G.ItemChunks[i] = new int2(chunkFirst, G.Chunks.Length - chunkFirst);
             }
         }
 
-        /// <summary>Splits a polygon's edges into chunks, so a band can skip the edges outside its rows.</summary>
-        void AddChunks(in Poly poly, float2* gp)
+        /// <summary>
+        /// Splits the edges of a polygon (<paramref name="n"/> points at <paramref name="v"/>, stored from
+        /// <paramref name="first"/>) into chunks, so a band can skip the edges outside its rows.
+        /// </summary>
+        internal static void AddChunks(float2* v, int first, int n, NativeList<EdgeChunk> chunks)
         {
-            int n = poly.Count;
-            if (n < 2) return;
-            float2* v = gp + poly.First;
             for (int a = 0; a < n; a += ChunkEdges)
             {
                 int b = math.min(n, a + ChunkEdges);
@@ -304,7 +349,7 @@ namespace Mynell.Lottie.Raster
                     mn = math.min(mn, v[k].y);
                     mx = math.max(mx, v[k].y);
                 }
-                G.Chunks.Add(new EdgeChunk { First = poly.First, Count = n, A = a, B = b, MinY = mn, MaxY = mx });
+                chunks.Add(new EdgeChunk { First = first, Count = n, A = a, B = b, MinY = mn, MaxY = mx });
             }
         }
 
@@ -1032,12 +1077,45 @@ namespace Mynell.Lottie.Raster
 
         // ================================================================== items
 
-        bool PrepareCoverage(int itemIndex, in DrawItem item, int4 targetRect, out int4 box, out CoverageRasterizer ras)
+        /// <summary>
+        /// The coverage of one item over its box, row by row: replayed from the band's cache, or swept from the rasterizer
+        /// (and recorded when the item's geometry is unchanged since the previous frame, so the next frame can replay it).
+        /// </summary>
+        struct ItemCoverage
         {
-            ras = default;
-            box = IntersectI(RoundOut(G.ItemBounds[itemIndex]), targetRect);
-            if (EmptyI(box)) return false;
+            public int4 Box;
+            public CoverageRasterizer Ras;
+            public bool EvenOdd;
+            [NativeDisableUnsafePtrRestriction] public CoverageSpan* Sweep;    // sweep output
+            [NativeDisableUnsafePtrRestriction] public CoverageSpan* Cached;   // replay when not null
+            [NativeDisableUnsafePtrRestriction] public int* Offsets;           // replay: row y is spans [Offsets[y], Offsets[y + 1])
+            public int Record;                                                  // cache entry being recorded, -1 none
+        }
+
+        /// <summary>Pixels of a target that an item can cover (empty when none).</summary>
+        int4 ItemBox(int itemIndex, int4 targetRect) => IntersectI(RoundOut(G.ItemBounds[itemIndex]), targetRect);
+
+        /// <summary>
+        /// Prepares the coverage of an item over a non-empty <paramref name="box"/> (from <see cref="ItemBox"/>). Every row
+        /// of the box must then be read with <see cref="CoverageRow"/>, in order.
+        /// </summary>
+        void PrepareCoverage(int itemIndex, in DrawItem item, int4 box, out ItemCoverage cov)
+        {
+            cov = default;
+            cov.Record = -1;
+            cov.Box = box;
+            cov.EvenOdd = item.FillRule == 1;
             int w = box.z - box.x, h = box.w - box.y;
+            float4 clip = SceneBuilder.Intersect(item.Clip, new float4(box.x, box.y, box.z, box.w));
+            clip -= new float4(box.x, box.y, box.x, box.y);
+            ulong geometry = NoShapeCache ? 0 : G.ItemIds[itemIndex];
+            if (geometry != 0)
+            {
+                var key = new CoverageCache.Key { Geometry = geometry, Box = box, Clip = clip, FillRule = item.FillRule };
+                if (R.Coverage.TryGet(key, out cov.Cached, out cov.Offsets)) return;
+                cov.Record = R.Coverage.Begin(key, h);
+            }
+
             int need = CoverageRasterizer.CellStride(w) * h;
             if (R.Acc.Length < need)
             {
@@ -1059,8 +1137,8 @@ namespace Mynell.Lottie.Raster
             }
             int spansNeed = 2 * (w + 2) + 2;
             if (R.Spans.Length < spansNeed) R.Spans.ResizeUninitialized(spansNeed);
-            float4 clip = SceneBuilder.Intersect(item.Clip, new float4(box.x, box.y, box.z, box.w));
-            clip -= new float4(box.x, box.y, box.x, box.y);
+            cov.Sweep = (CoverageSpan*)R.Spans.GetUnsafePtr();
+            ref CoverageRasterizer ras = ref cov.Ras;
             ras.Begin((float*)R.Acc.GetUnsafePtr(), (ulong*)R.Bits.GetUnsafePtr(), (int*)R.RowMin.GetUnsafePtr(),
                 (int*)R.RowMax.GetUnsafePtr(), w, h, clip);
 
@@ -1084,7 +1162,7 @@ namespace Mynell.Lottie.Raster
                     }
                     if (Stats != null) Stats[3] += ch.B - ch.A;
                 }
-                return true;
+                return;
             }
             int2 geo = G.ItemGeo[itemIndex];
             for (int p = 0; p < geo.y; p++)
@@ -1101,7 +1179,21 @@ namespace Mynell.Lottie.Raster
                 }
                 if (Stats != null) Stats[3] += poly.Count;
             }
-            return true;
+        }
+
+        /// <summary>Spans of row <paramref name="y"/> (box-relative) of an item's coverage; returns their count.</summary>
+        int CoverageRow(ref ItemCoverage cov, int y, out CoverageSpan* spans)
+        {
+            if (cov.Cached != null)
+            {
+                int a = cov.Offsets[y];
+                spans = cov.Cached + a;
+                return cov.Offsets[y + 1] - a;
+            }
+            spans = cov.Sweep;
+            int n = cov.Ras.Sweep(y, cov.EvenOdd, spans, MinCoverage);
+            if (cov.Record >= 0) R.Coverage.AddRow(cov.Record, spans, n);
+            return n;
         }
 
         /// <summary>
@@ -1111,18 +1203,14 @@ namespace Mynell.Lottie.Raster
         /// </summary>
         bool DrawItemInto(int itemIndex, in DrawItem item, in Surface target, bool fresh)
         {
-            if (!PrepareCoverage(itemIndex, item, target.Rect, out int4 box, out CoverageRasterizer ras)) return false;
+            int4 box = ItemBox(itemIndex, target.Rect);
+            if (EmptyI(box)) return false;
             PaintData paint = F.Paints[item.Paint];
             var shader = PaintShader.Create(paint, F.PaintFloats, ImagePixels, ImageInfo, ImageCount);
+            if (shader.Transparent) return false;
+            PrepareCoverage(itemIndex, item, box, out ItemCoverage coverage);
             if (Stats != null) Stats[4]++;
-            bool evenOdd = item.FillRule == 1;
-            var spans = (CoverageSpan*)R.Spans.GetUnsafePtr();
             int h = box.w - box.y;
-            if (shader.Transparent)
-            {
-                for (int y = 0; y < h; y++) ras.Sweep(y, evenOdd, spans, MinCoverage);
-                return false;
-            }
             uint* px = Px(target);
             if (fresh)
             {
@@ -1136,7 +1224,7 @@ namespace Mynell.Lottie.Raster
             int rowStart = target.X0 - box.x, rowEnd = target.X0 + target.W - box.x;
             for (int y = 0; y < h; y++)
             {
-                int n = ras.Sweep(y, evenOdd, spans, MinCoverage);
+                int n = CoverageRow(ref coverage, y, out CoverageSpan* spans);
                 int dy = box.y + y;
                 uint* row = px + (dy - target.Y0) * target.W + (box.x - target.X0);
                 if (Stats != null) CountSpans(spans, n, shader.IsSolid ? solid : 0u, shader.IsSolid);
@@ -1294,7 +1382,6 @@ namespace Mynell.Lottie.Raster
         {
             PaintData paint = F.Paints[item.Paint];
             uint op8 = (uint)(math.saturate(paint.Opacity * paint.Color.w) * 255f + 0.5f);
-            bool evenOdd = item.FillRule == 1;
             bool chained = _mergeOffset >= 0 || item.MaskMerge != 0;
             bool needsTemp = chained || math.any(item.Erode > 0) ||
                              item.Mask == MaskOp.Intersect || item.Mask == MaskOp.Darken;
@@ -1303,14 +1390,15 @@ namespace Mynell.Lottie.Raster
             if (!needsTemp)
             {
                 // Direct application: pixels outside the coverage are unaffected by add / subtract / lighten / difference.
-                if (!PrepareCoverage(itemIndex, item, target.Rect, out int4 b, out CoverageRasterizer r)) return;
-                var spans = (CoverageSpan*)R.Spans.GetUnsafePtr();
+                int4 b = ItemBox(itemIndex, target.Rect);
+                if (EmptyI(b)) return;
+                PrepareCoverage(itemIndex, item, b, out ItemCoverage coverage);
                 byte* mp = MaskPx(target);
                 MaskOp direct = item.Mask;
                 int h = b.w - b.y;
                 for (int y = 0; y < h; y++)
                 {
-                    int n = r.Sweep(y, evenOdd, spans, MinCoverage);
+                    int n = CoverageRow(ref coverage, y, out CoverageSpan* spans);
                     byte* row = mp + (b.y + y - target.Y0) * target.W + (b.x - target.X0);
                     for (int k = 0; k < n; k++)
                     {
@@ -1329,14 +1417,15 @@ namespace Mynell.Lottie.Raster
                 R.MaskArena.ResizeUninitialized(_mergeOffset + area);
                 UnsafeUtility.MemClear((byte*)R.MaskArena.GetUnsafePtr() + _mergeOffset, area);
             }
-            if (PrepareCoverage(itemIndex, item, target.Rect, out int4 box, out CoverageRasterizer ras))
+            int4 box = ItemBox(itemIndex, target.Rect);
+            if (!EmptyI(box))
             {
-                var spans = (CoverageSpan*)R.Spans.GetUnsafePtr();
+                PrepareCoverage(itemIndex, item, box, out ItemCoverage coverage);
                 byte* tp = (byte*)R.MaskArena.GetUnsafePtr() + _mergeOffset;
                 int h = box.w - box.y;
                 for (int y = 0; y < h; y++)
                 {
-                    int n = ras.Sweep(y, evenOdd, spans, MinCoverage);
+                    int n = CoverageRow(ref coverage, y, out CoverageSpan* spans);
                     byte* row = tp + (box.y + y - target.Y0) * target.W + (box.x - target.X0);
                     for (int k = 0; k < n; k++)
                     {
