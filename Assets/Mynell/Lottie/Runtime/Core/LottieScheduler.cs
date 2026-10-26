@@ -19,6 +19,7 @@ namespace Mynell.Lottie
         static readonly List<LottiePlayer> s_Snapshot = new List<LottiePlayer>();
         static readonly List<LottiePlayer> s_InFlight = new List<LottiePlayer>();
         static bool s_Installed;
+        static double s_Clock;   // unscaled seconds advanced by the ticks (frame rate limit)
 
         struct LottieScheduleRenders { }
         struct LottieCompleteRenders { }
@@ -83,6 +84,8 @@ namespace Mynell.Lottie
         static void ScheduleAll(float dt, float udt, bool advance)
         {
             if (s_Players.Count == 0) return;
+            if (advance) s_Clock += udt;
+            double now = advance ? s_Clock : double.NaN;
             s_Snapshot.Clear();
             s_Snapshot.AddRange(s_Players);
             bool any = false;
@@ -103,7 +106,7 @@ namespace Mynell.Lottie
                 try
                 {
                     if (advance && p.Active && p.AutoAdvance && p.IsPlaying) p.Advance(p.UnscaledTime ? udt : dt);
-                    if (p.ScheduleRender())
+                    if (p.ScheduleRender(now))
                     {
                         s_InFlight.Add(p);
                         any = true;

@@ -51,6 +51,7 @@ namespace Mynell.Lottie
         float _renderedFrame = float.NaN;
         int _renderedW, _renderedH;
         LottieScaleMode _renderedScale;
+        double _nextRender = double.NegativeInfinity;
         bool _disposed;
         LottieOverrides _overrides;
 
@@ -395,15 +396,24 @@ namespace Mynell.Lottie
             }
         }
 
-        /// <summary>Schedules the render job (main thread). Returns false when nothing needs rendering.</summary>
-        internal bool ScheduleRender()
+        /// <summary>
+        /// Schedules the render job (main thread). Returns false when nothing needs rendering, or when a playing animation
+        /// only moved on in time and <see cref="LottieSettings.MaxFrameRate"/> says to wait (<paramref name="now"/>:
+        /// scheduler clock in seconds, NaN = no limit).
+        /// </summary>
+        internal bool ScheduleRender(double now = double.NaN)
         {
             if (_pending || !NeedsRender) return false;
             var a = Animation;
+            bool timeOnly = !_force && _texture != null && a == _renderedAnimation && _renderedW == _width &&
+                            _renderedH == _height && _renderedScale == ScaleMode;
+            if (timeOnly && IsPlaying && !double.IsNaN(now) && Throttled(ref _nextRender, now, LottieSettings.MaxFrameRate)) return false;
             bool force = EnsureTexture() | _force | a != _renderedAnimation;
             _force = false;
             _state ??= new LottieRenderState { PersistentTarget = true };
             _state.Overrides = _overrides;
+            _state.CacheShapes = LottieSettings.CacheShapes;
+            _state.Threads = LottieSettings.ThreadsPerAnimation;
             if (force) _state.Invalidate();
             var pixels = _texture.GetRawTextureData<uint>();
             float frame = RenderFrameValue;
@@ -416,6 +426,20 @@ namespace Mynell.Lottie
             _renderedScale = ScaleMode;
             _dirty = false;
             return true;
+        }
+
+        /// <summary>
+        /// Frame rate limit: true when a render at <paramref name="now"/> (seconds) would come too soon after the previous
+        /// ones. <paramref name="next"/> is when the next render is due; a tenth of an interval of slack absorbs frame time
+        /// jitter, so a 60 fps game limited to 30 renders every other frame.
+        /// </summary>
+        internal static bool Throttled(ref double next, double now, int maxFrameRate)
+        {
+            if (maxFrameRate <= 0) return false;
+            double interval = 1.0 / maxFrameRate;
+            if (now < next - interval * 0.1) return true;
+            next = now - next >= interval ? now + interval : next + interval;
+            return false;
         }
 
         /// <summary>Waits for a scheduled render and uploads the texture.</summary>

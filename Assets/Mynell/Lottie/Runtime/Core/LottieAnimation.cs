@@ -202,6 +202,15 @@ namespace Mynell.Lottie
         /// <summary>Flattening tolerance in device pixels (lower = smoother curves, more work).</summary>
         public float Tolerance = 0.03f;
 
+        /// <summary>
+        /// Reuse the geometry and coverage of the shapes that are unchanged since the previous frame. The pixels are
+        /// the same either way; when false the memory of the caches is freed.
+        /// </summary>
+        public bool CacheShapes = true;
+
+        /// <summary>Most threads a frame is split across: 0 = all worker threads, 1 = one job.</summary>
+        public int Threads;
+
         /// <summary>Skip rasterizing frames whose content equals the previously rendered frame (the target keeps its pixels).</summary>
         public bool SkipUnchanged = true;
 
@@ -272,11 +281,12 @@ namespace Mynell.Lottie
         /// <summary>Bands available per render when several players render in the same frame (0 = no limit).</summary>
         internal static int BandBudget;
 
-        static int BandCount(int width, int height)
+        int BandCount(int width, int height)
         {
             int workers = Unity.Jobs.LowLevel.Unsafe.JobsUtility.JobWorkerCount;
-            if (workers <= 0 || (long)width * height < MinPixelsForBands) return 1;
-            int max = MaxBands > 0 ? MaxBands : BandsPerThread * (workers + 1);
+            int threads = Threads > 0 ? math.min(Threads, workers + 1) : workers + 1;
+            if (threads <= 1 || (long)width * height < MinPixelsForBands) return 1;
+            int max = MaxBands > 0 ? MaxBands : BandsPerThread * threads;
             if (BandBudget > 0) max = math.min(max, BandBudget);
             return math.clamp(math.min(max, height / MinBandHeight), 1, 64);
         }
@@ -312,6 +322,7 @@ namespace Mynell.Lottie
                 Status = status,
                 SkipUnchanged = SkipUnchanged,
                 PrepareOnly = bands > 1,
+                NoShapeCache = !CacheShapes,
                 OverrideSlots = Overrides != null ? Overrides.Slots : null,
                 OverrideValues = Overrides != null ? Overrides.Values : null,
             };
@@ -341,6 +352,7 @@ namespace Mynell.Lottie
                         Y1 = (int)((long)height * (b + 1) / bands),
                         Pixels = ptr,
                         Tolerance = Tolerance,
+                        NoShapeCache = !CacheShapes,
                         ThreadLog = DebugThreadLog != null ? DebugThreadLog + b : null,
                     }.Schedule(_pending);
                 }

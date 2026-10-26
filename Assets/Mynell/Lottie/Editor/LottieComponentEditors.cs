@@ -137,7 +137,7 @@ namespace Mynell.Lottie.Editor
 
             LottieEditorGUI.Header("Resolution");
             EditorGUILayout.PropertyField(m_ResolutionScale, new GUIContent("Resolution Scale",
-                "Texture resolution relative to the element's on-screen pixel size."));
+                "Texture resolution relative to the element's on-screen pixel size (times the project's Resolution Scale)."));
             EditorGUILayout.PropertyField(m_MaxTextureSize);
             if (targets.Length == 1 && image.isActiveAndEnabled && image.Player.Texture != null)
                 EditorGUILayout.LabelField(" ", $"{image.Player.Width} x {image.Player.Height} px", EditorStyles.miniLabel);
@@ -203,7 +203,7 @@ namespace Mynell.Lottie.Editor
             LottieEditorGUI.Playback(m_PlayOnEnable, m_LoopMode, m_LoopCount, m_Speed, m_UnscaledTime, m_Subframes);
 
             LottieEditorGUI.Header("Resolution");
-            EditorGUILayout.PropertyField(m_TextureScale, new GUIContent("Texture Scale", "Texture resolution relative to the composition size."));
+            EditorGUILayout.PropertyField(m_TextureScale, new GUIContent("Texture Scale", "Texture resolution relative to the composition size (times the project's Resolution Scale)."));
             EditorGUILayout.PropertyField(m_MaxTextureSize);
             if (targets.Length == 1 && renderer.isActiveAndEnabled && renderer.Player.Texture != null)
                 EditorGUILayout.LabelField(" ", $"{renderer.Player.Width} x {renderer.Player.Height} px", EditorStyles.miniLabel);

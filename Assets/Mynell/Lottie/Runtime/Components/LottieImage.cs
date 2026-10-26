@@ -131,6 +131,7 @@ namespace Mynell.Lottie
             base.OnEnable();
             EnsurePlayer();
             m_Player.Active = true;
+            LottieSettings.Changed += OnSettingsChanged;
             UpdateRenderSize();
             if (Application.isPlaying)
             {
@@ -146,6 +147,7 @@ namespace Mynell.Lottie
 
         protected override void OnDisable()
         {
+            LottieSettings.Changed -= OnSettingsChanged;
             if (m_Player != null)
             {
                 m_Player.Active = false;
@@ -200,6 +202,13 @@ namespace Mynell.Lottie
 
         void OnPlayerCompleted(LottiePlayer p) => m_OnComplete?.Invoke();
 
+        void OnSettingsChanged()
+        {
+            if (m_Player == null) return;
+            UpdateRenderSize();
+            if (!Application.isPlaying) m_Player.RenderNow();
+        }
+
         void OnFrameRendered(LottiePlayer p)
         {
             if (m_BoundTexture != p.Texture)
@@ -238,7 +247,8 @@ namespace Mynell.Lottie
             if (m_Player == null || m_Asset == null) return;
             Rect r = DrawRect();
             float scale = canvas != null ? canvas.scaleFactor : 1f;
-            float w = r.width * scale * m_ResolutionScale, h = r.height * scale * m_ResolutionScale;
+            scale *= m_ResolutionScale * LottieSettings.ResolutionScale;
+            float w = r.width * scale, h = r.height * scale;
             float max = Mathf.Max(w, h);
             if (max > m_MaxTextureSize)
             {

@@ -171,6 +171,8 @@ namespace Mynell.Lottie
         {
             EnsurePlayer();
             m_Player.Active = true;
+            LottieSettings.Changed -= OnSettingsChanged;
+            LottieSettings.Changed += OnSettingsChanged;
             UpdateSize();
             if (!float.IsNaN(m_SavedFrame))
             {
@@ -185,6 +187,7 @@ namespace Mynell.Lottie
 
         void OnDetachFromPanel(DetachFromPanelEvent e)
         {
+            LottieSettings.Changed -= OnSettingsChanged;
             if (m_Player != null)
             {
                 m_SavedFrame = m_Player.Frame;
@@ -200,6 +203,12 @@ namespace Mynell.Lottie
                 LottieUtil.DestroySafe(m_Target);
                 m_Target = null;
             }
+        }
+
+        void OnSettingsChanged()
+        {
+            UpdateSize();
+            RenderInEditor();
         }
 
         /// <summary>Outside play mode nothing advances the scheduler: render the current frame directly.</summary>
@@ -236,7 +245,7 @@ namespace Mynell.Lottie
             if (m_Player == null || m_Asset == null || panel == null) return;
             Rect r = DrawRect();
             if (!(r.width > 0) || !(r.height > 0)) return;
-            float scale = panel.scaledPixelsPerPoint * m_ResolutionScale;
+            float scale = panel.scaledPixelsPerPoint * m_ResolutionScale * LottieSettings.ResolutionScale;
             float w = r.width * scale, h = r.height * scale;
             float max = Mathf.Max(w, h);
             if (max > m_MaxTextureSize)

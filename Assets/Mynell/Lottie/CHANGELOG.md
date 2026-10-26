@@ -4,6 +4,11 @@
 
 - Faster drawing with the same pixels: at 1024 x 1024 a frame is 1.9x faster on one core and 1.7x faster with all
   cores. Every frame of the 204 test animations renders bit for bit as before.
+- Shapes that didn't change since the previous frame are not flattened, stroked or rasterized again (same pixels).
+  At 1024 x 1024 that's another 15% on one core and 9% with all cores.
+- Project settings: *Edit > Project Settings > Mynell Lottie* or `LottieSettings` from code. Resolution scale for all
+  components, max frame rate, threads per animation and the shape cache.
+- `LottieRenderState.CacheShapes` and `LottieRenderState.Threads`.
 
 ## [1.0.0]
 

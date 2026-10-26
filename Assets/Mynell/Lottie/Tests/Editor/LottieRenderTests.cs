@@ -165,6 +165,137 @@ namespace Mynell.Lottie.Tests
             }
         }
 
+        [Test]
+        public void ShapeCache_GivesTheSamePixels()
+        {
+            // A moving stroked circle over a static ellipse: with and without the caches, in one job and in bands.
+            string moving = "\"ks\":{\"p\":{\"a\":1,\"k\":[{\"t\":0,\"s\":[20,50]},{\"t\":30,\"s\":[80,50]}]},\"a\":{\"a\":0,\"k\":[0,0]}," +
+                            "\"s\":{\"a\":0,\"k\":[100,100]},\"r\":{\"a\":0,\"k\":0},\"o\":{\"a\":0,\"k\":100}}";
+            string stroke = "{\"ty\":\"st\",\"c\":{\"a\":0,\"k\":[0,0,0,1]},\"o\":{\"a\":0,\"k\":100},\"w\":{\"a\":0,\"k\":3},\"lc\":2,\"lj\":2}";
+            string layers = ShapeLayer("{\"ty\":\"el\",\"p\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[30,30]}}," + stroke + "," + Fill(1, 0, 0), moving) + "," +
+                            ShapeLayer("{\"ty\":\"el\",\"p\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[80,60]}}," + Fill(0, 0.4f, 1, 70), Transform, 2);
+            const int size = 640;
+            using var anim = LottieAnimation.FromJson(Comp(layers));
+            using var cached = new LottieRenderState { SkipUnchanged = false };
+            using var plain = new LottieRenderState { SkipUnchanged = false, CacheShapes = false };
+            var a = new NativeArray<uint>(size * size, Allocator.Persistent);
+            var b = new NativeArray<uint>(size * size, Allocator.Persistent);
+            int saved = LottieRenderState.MaxBands;
+            try
+            {
+                Affine2 m = LottieRenderState.FitTransform(100, 100, size, size, false);
+                foreach (int bands in new[] { 1, 12 })
+                {
+                    LottieRenderState.MaxBands = bands;
+                    for (int f = 0; f < 40; f++)
+                    {
+                        cached.RenderImmediate(anim, f, m, a, size, size);
+                        plain.RenderImmediate(anim, f, m, b, size, size);
+                        Assert.IsTrue(a.ArraysEqual(b), $"frame {f} with {bands} bands differs");
+                    }
+                }
+            }
+            finally
+            {
+                LottieRenderState.MaxBands = saved;
+                a.Dispose();
+                b.Dispose();
+            }
+        }
+
+        [Test]
+        public void Threads_LimitTheBands()
+        {
+            using var anim = LottieAnimation.FromJson(Comp(ShapeLayer(Rect(0, 0, 40, 40) + "," + Fill(1, 0, 0))));
+            using var state = new LottieRenderState { SkipUnchanged = false, Threads = 1 };
+            var px = new NativeArray<uint>(640 * 640, Allocator.Persistent);
+            try
+            {
+                Affine2 m = LottieRenderState.FitTransform(100, 100, 640, 640, false);
+                state.RenderImmediate(anim, 0, m, px, 640, 640);
+                Assert.AreEqual(1, state.LastBandCount);
+                state.Threads = 2;
+                state.RenderImmediate(anim, 0, m, px, 640, 640);
+                Assert.LessOrEqual(state.LastBandCount, 2 * LottieRenderState.BandsPerThread);
+            }
+            finally
+            {
+                px.Dispose();
+            }
+        }
+
+        [Test]
+        public void Settings_AreClampedAndRaiseChanged()
+        {
+            int changes = 0;
+            void OnChanged() => changes++;
+            LottieSettings.Reload();
+            float scale = LottieSettings.ResolutionScale;
+            LottieSettings.Changed += OnChanged;
+            try
+            {
+                LottieSettings.ResolutionScale = 10f;
+                Assert.AreEqual(2f, LottieSettings.ResolutionScale);
+                LottieSettings.ResolutionScale = 2f;
+                LottieSettings.ResolutionScale = 0f;
+                Assert.AreEqual(0.25f, LottieSettings.ResolutionScale);
+                Assert.AreEqual(scale == 2f ? 1 : 2, changes, "only real changes are reported");
+                LottieSettings.MaxFrameRate = -5;
+                Assert.AreEqual(0, LottieSettings.MaxFrameRate);
+                LottieSettings.Reload();
+                Assert.AreEqual(scale, LottieSettings.ResolutionScale, "Reload goes back to the saved values");
+            }
+            finally
+            {
+                LottieSettings.Changed -= OnChanged;
+                LottieSettings.Reload();
+            }
+        }
+
+        [Test]
+        public void SettingsAsset_IsLoadedFromResources()
+        {
+            if (Resources.Load<LottieSettingsAsset>(LottieSettings.AssetName) != null)
+                Assert.Ignore("The project has its own settings asset.");
+            UnityEditor.AssetDatabase.CreateFolder("Assets", "MynellLottieTest");
+            UnityEditor.AssetDatabase.CreateFolder("Assets/MynellLottieTest", "Resources");
+            var asset = ScriptableObject.CreateInstance<LottieSettingsAsset>();
+            var so = new UnityEditor.SerializedObject(asset);
+            so.FindProperty("m_MaxFrameRate").intValue = 24;
+            so.FindProperty("m_ResolutionScale").floatValue = 5f;
+            so.ApplyModifiedPropertiesWithoutUndo();
+            UnityEditor.AssetDatabase.CreateAsset(asset, "Assets/MynellLottieTest/Resources/" + LottieSettings.AssetName + ".asset");
+            try
+            {
+                LottieSettings.Reload();
+                Assert.AreEqual(24, LottieSettings.MaxFrameRate);
+                Assert.AreEqual(2f, LottieSettings.ResolutionScale, "out of range values are clamped");
+                Assert.IsTrue(LottieSettings.CacheShapes);
+            }
+            finally
+            {
+                UnityEditor.AssetDatabase.DeleteAsset("Assets/MynellLottieTest");
+                LottieSettings.Reload();
+            }
+            Assert.AreEqual(0, LottieSettings.MaxFrameRate, "without the asset the defaults apply");
+        }
+
+        [Test]
+        public void MaxFrameRate_SpacesTheRenders()
+        {
+            // 60 fps game limited to 30: every other frame. 50 fps limited to 30: 30 per second, at most.
+            foreach (var (fps, cap, expected) in new[] { (60.0, 30, 300), (50.0, 30, 300), (144.0, 60, 600), (30.0, 60, 300) })
+            {
+                double next = double.NegativeInfinity;
+                int rendered = 0;
+                for (int i = 0; i < fps * 10; i++)
+                    if (!LottiePlayer.Throttled(ref next, i / fps, cap)) rendered++;
+                Assert.AreEqual(expected, rendered, $"{fps} fps limited to {cap}");
+            }
+            double n = 5;
+            Assert.IsFalse(LottiePlayer.Throttled(ref n, 0, 0), "0 = no limit");
+        }
+
         // ------------------------------------------------------------------ data & playback
 
         [Test]

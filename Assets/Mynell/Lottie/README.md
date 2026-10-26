@@ -43,7 +43,7 @@ animation. The sample animations were made for this package and are free to use.
 | Preserve Aspect | Keeps the aspect ratio inside the rect. *Set Native Size* uses the animation's size. |
 | Play On Enable, Loop Mode, Loop Count, Speed, Unscaled Time | Playback. Loop Count 0 means forever. Negative speed plays backwards. |
 | Subframes | Draws in-between frames for smooth motion, like lottie-web. Turn it off to snap to whole frames. |
-| Resolution Scale | Texture resolution compared to the size on screen. |
+| Resolution Scale | Texture resolution compared to the size on screen (times the project's *Resolution Scale*, see Settings). |
 | Max Texture Size | Limit for the texture's longest side. |
 | On Complete | Called when playback ends (or the loop count is reached). |
 
@@ -132,6 +132,35 @@ file, pass a font with `new LottieCompileOptions { FontResolver = request => fon
 For full control, `LottieAnimation` and `LottieRenderState` render any frame into a `NativeArray<uint>` from a job
 (`state.Schedule(animation, frame, transform, pixels, width, height)`).
 
+## Settings
+
+*Edit > Project Settings > Mynell Lottie* (also *Tools > Mynell Lottie > Settings*) has the settings for the whole
+project. The defaults give the best result; change them when you want to trade sharpness or smoothness for speed,
+or speed for memory.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Resolution Scale | 1 | Multiplies the texture resolution of every Lottie Image, Lottie Renderer and Lottie Element. In the speed test below, 0.75 made a frame 1.5x faster and 0.5 2.6x faster (one core). |
+| Max Frame Rate | 0 | Most frames per second a playing animation is drawn, for example 30 on a 60 or 120 Hz screen. Playback speed stays the same, the texture is just updated less often. 0 means every frame. |
+| Threads Per Animation | 0 | Most threads one frame is split across. 0 means all worker threads. 1 draws each frame as one job, which uses less CPU time in total but takes longer per frame; several animations still draw in parallel. |
+| Cache Shapes | on | Shapes that didn't change since the last frame aren't rasterized again. The pixels are the same either way. At 1024 x 1024 it takes about 0.1 - 0.3 MB per playing animation (up to 2 MB for long texts); turn it off if memory is tighter than CPU time. |
+
+The values are saved in `Assets/Resources/MynellLottieSettings.asset` when you change one, so builds use them too.
+From code, at runtime:
+
+```csharp
+LottieSettings.MaxFrameRate = 30;
+LottieSettings.ResolutionScale = 0.75f;
+LottieSettings.Changed += () => Debug.Log("Lottie settings changed");
+LottieSettings.Reload();   // back to the saved values
+```
+
+A change applies from the next frame. Changes made from code aren't saved.
+
+There is no curve quality setting on purpose: drawing curves 8 times coarser (0.25 px instead of 0.03 px) makes a
+frame less than 5% faster and already changes some pixels a lot. Fewer pixels or fewer frames are what really save
+time.
+
 ## Shaders
 
 Textures have **premultiplied** RGBA with sRGB colours. The included shaders handle this in linear and gamma colour
@@ -178,15 +207,15 @@ rlottie), every frame (26,241 frames), drawing only, no GPU upload. Apple M2 Pro
 
 | | **Mynell, all cores** | Mynell, 1 core | ThorVG for Unity | SkiaForUnity | rlottie players |
 | --- | --- | --- | --- | --- | --- |
-| 512 x 512 | 0.18 | 0.32 | 0.25 | 0.42 | 0.10 - 0.12 |
-| 1024 x 1024 | 0.28 | 0.78 | 0.72 | 1.41 | 0.27 - 0.37 |
-| 1024 x 1024, 10 heaviest files | 0.49 | 1.88 | 2.89 | 4.11 | 0.90 - 1.09 |
+| 512 x 512 | 0.15 | 0.24 | 0.25 | 0.42 | 0.10 - 0.12 |
+| 1024 x 1024 | 0.26 | 0.64 | 0.72 | 1.41 | 0.27 - 0.37 |
+| 1024 x 1024, 10 heaviest files | 0.45 | 1.75 | 2.89 | 4.11 | 0.90 - 1.09 |
 
-So rlottie is the fastest on average, but it skips text and effects. The 10 heaviest files are the ones ThorVG takes
-longest on (blurs, mattes, masks, effects): there Mynell with all cores is the fastest, and on one core it is faster
-than ThorVG and SkiaForUnity. On the 23 files that every player draws the same way, at 1024 x 1024: rlottie
-0.20 - 0.26 ms, Mynell 0.21 ms (0.47 ms on one core), ThorVG 0.43 ms, SkiaForUnity 1.21 ms. Mynell also doesn't
-redraw or re-upload frames that didn't change (pauses, holds), which this test doesn't show.
+So at 512 x 512 rlottie is the fastest, but it skips text and effects. At 1024 x 1024 Mynell with all cores is the
+fastest, and on one core it is faster than ThorVG and SkiaForUnity at both sizes. The 10 heaviest files are the
+ones ThorVG takes longest on (blurs, mattes, masks, effects). On the 23 files that every player draws the same way,
+at 1024 x 1024: rlottie 0.20 - 0.26 ms, Mynell 0.21 ms (0.38 ms on one core), ThorVG 0.43 ms, SkiaForUnity 1.21 ms.
+Mynell also doesn't redraw or re-upload frames that didn't change (pauses, holds), which this test doesn't show.
 
 How the test was done:
 
@@ -269,9 +298,11 @@ next to the JSON file.
 
 - Each player renders in Burst jobs on worker threads. Big frames (more than 512 x 256 pixels) are split into bands
   that render in parallel. When many players render at once, the bands are shared so the threads aren't overloaded.
-- A frame that looks the same as the previous one is neither drawn nor uploaded again.
+- A frame that looks the same as the previous one is neither drawn nor uploaded again, and shapes that didn't change
+  since the previous frame aren't rasterized again.
 - Texture size is the main cost. Keep *Resolution Scale* at 1 and lower *Max Texture Size* for big animations when
-  you don't need sharp detail.
+  you don't need sharp detail, or lower the project's *Resolution Scale* on slow devices (see Settings).
+- On high refresh rate screens, *Max Frame Rate* (see Settings) keeps animations from being drawn 120 times a second.
 - Blurs, shadows, glows, layer styles and big masks or mattes cost more than plain shapes. Motion Tile, Corner Pin,
   Bulge, CC Sphere, Displacement Map and 3D layers in perspective render their frame as one band.
 - WebGL has no worker threads and no Burst. Animations look the same there, they are just slower.
